@@ -1,0 +1,53 @@
+{
+  "baseURL": "https://api.kimi.com/coding/v1",
+  "models": [
+    {
+      "id": "k3.1-pro",
+      "name": "K3.1 Pro",
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    },
+    {
+      "id": "k3.1-pro-highspeed",
+      "name": "K3.1 Pro Highspeed",
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    },
+    {
+      "id": "k3",
+      "name": "K3",
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    },
+    {
+      "id": "k3-256k",
+      "name": "K3 256K",
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    },
+    {
+      "id": "kimi-for-coding",
+      "name": "K2.8 Preview",
+      "contextWindow": 1048576,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    },
+    {
+      "id": "kimi-for-coding-highspeed",
+      "name": "K2.7 Code Highspeed",
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "reasoning": true
+    }
+  ]
+}

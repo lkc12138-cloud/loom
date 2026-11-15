@@ -29,10 +29,10 @@ loom add longcat               # 美团 LongCat；只需隐藏输入开放平台
 | 编号 | 供应商 | 需要的 Key | 自动配置的模型 |
 | --- | --- | --- | --- |
 | 1 | ZenMux | 推理 API Key，非 Management Key | Claude 5.5 系列 + 公共目录中的 Muse Wonder、Ling 3.1 Flash、MiMo V2.6 Flash / Pro |
-| 2 | GLM 国内 Coding Plan | 该套餐的 API Key | GLM 5.3 / Flash / FlashX |
+| 2 | GLM 国内 Coding Plan | 该套餐的 API Key | GLM 5.3 / Flash / FlashX、5.2 / 5.1 / 5-Turbo / 5、4.7 / 4.6 / 4.5 / 4.5 Air |
 | 3 | MiniMax 国内订阅 | Subscription Key | MiniMax M3.1 Flash |
 | 4 | DeepSeek API 钱包 | 开放平台 API Key | DeepSeek Flash / V4 Pro |
-| 5 | Kimi Code 国内订阅 | Kimi Code API Key，非 Moonshot Key | K3.1 Pro / Highspeed |
+| 5 | Kimi Code 国内订阅 | Kimi Code API Key，非 Moonshot Key | K3.1 Pro / Highspeed、K3 / K3 256K、K2.8 Preview / K2.7 Code Highspeed |
 | 6 | LongCat 美团开放平台 | LongCat API Key，非网页登录令牌 | LongCat-2.5 |
 
 预设是公共接入信息，不代表账号已获所有模型权限；模型权限仍由上游套餐决定，不自动发送付费测试请求。上下文 128K、最大输出 8K、文本输入是保守初始设置，可在中央配置中调整。不同套餐不混用、不跨供应商回退。预设来源：[ZenMux](https://zenmux.ai/docs/guide/quickstart.html)、[GLM Coding Plan](https://docs.bigmodel.cn/cn/coding-plan/quick-start)、[MiniMax](https://platform.minimax.cn/docs/m-plan/quickstart)、[DeepSeek](https://api-docs.deepseek.com/quick_start/pricing-details-cny/)、[Kimi Code](https://www.kimi.com/code/docs/)、[LongCat](https://longcat.chat/platform/docs/zh/)。
@@ -110,11 +110,11 @@ node tests/pi-thinking.mjs target/debug/loom /path/to/@earendil-works/pi-ai
 
 ## 多台机器的模型目录
 
-从 0.6.0 起，[catalog/zenmux.json](catalog/zenmux.json) 随 Loom 一起发布公共模型目录。已有 ZenMux provider（`https://zenmux.ai/api/v1`）在运行时自动补充这些模型；没有配置 ZenMux 的机器不会自动创建 provider。私有 `providers.json` 和 Key 文件仍留在各台机器，不进入仓库，也不会因为更新公共目录而被改写。
+从 0.6.0 起，[catalog/zenmux.json](catalog/zenmux.json)、[catalog/glm.json](catalog/glm.json) 与 [catalog/kimi.json](catalog/kimi.json) 随 Loom 一起发布公共模型目录。已有对应官方端点的 ZenMux（`https://zenmux.ai/api/v1`）、GLM Coding Plan（`https://open.bigmodel.cn/api/coding/paas/v4`）和 Kimi Code（`https://api.kimi.com/coding/v1`）provider 会在运行时自动补充缺失模型（如 GLM 5.2 / 5.1 / 5-Turbo / 5 / 4.7 / 4.6 / 4.5 / 4.5 Air 与 Kimi K3 / K3 256K / K2.8 Preview / K2.7 Code Highspeed）；未配置的机器不会自动创建 provider。私有 `providers.json` 和 Key 文件仍留在各台机器，不进入仓库，也不会因为更新公共目录而被改写。
 
 其他机器执行 `loom update` 后，新网关会自动把有效目录同步到 pi / opencode2 和已有 Claude Code 设置。不必重新输入 Key 或重新添加 provider；已经打开的 agent 需要退出重开，以加载更新后的模型列表。手动运行 `loom sync` 也使用同一目录，旧版 `loom sync` 只同步本机旧配置，不能获取新版目录。
 
-目前公共目录补充 `meta/muse-wonder-1.0`、`inclusionai/ling-3.1-flash`、`xiaomi/mimo-v2.6-flash` 和 `xiaomi/mimo-v2.6-pro`，均已核对 ZenMux 的 Chat Completions / Messages 适配。来源：[ZenMux 公共目录](https://zenmux.ai/api/v1/models)、[模型及协议目录](https://zenmux.ai/api/frontend/model/available/list)。Clef Omni 只支持 Decisions API，当前不作为聊天模型发布。
+目前公共目录中 ZenMux 补充 `meta/muse-wonder-1.0`、`inclusionai/ling-3.1-flash`、`xiaomi/mimo-v2.6-flash` 和 `xiaomi/mimo-v2.6-pro`，GLM 补充 `glm-5.3` / `5.3-flash` / `5.3-flashx` / `5.2` / `5.1` / `5-turbo` / `5` / `4.7` / `4.6` / `4.5` / `4.5-air`，Kimi Code 补充 `k3.1-pro` / `k3.1-pro-highspeed` / `k3` / `k3-256k` / `kimi-for-coding` / `kimi-for-coding-highspeed`。Clef Omni 只支持 Decisions API，当前不作为聊天模型发布。
 
 本机 `models` 中同 ID 的条目始终优先，名称、上下文、输出上限、停用状态和默认模型均保留。隐藏一个公共模型时，在该 provider 的 `models` 中加入相应 ID 和 `"enabled": false`；只从本机数组删除条目会重新显示公共默认值。若希望完全自行维护该供应商的模型列表，在 provider 上设置 `"includeBundledModels": false`。自定义端点不自动套用 ZenMux 公共目录。
 

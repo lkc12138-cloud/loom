@@ -42,6 +42,14 @@ const PRESETS: &[Preset] = &[
             ("glm-5.3", "GLM 5.3"),
             ("glm-5.3-flash", "GLM 5.3 Flash"),
             ("glm-5.3-flashx", "GLM 5.3 FlashX"),
+            ("glm-5.2", "GLM 5.2"),
+            ("glm-5.1", "GLM 5.1"),
+            ("glm-5-turbo", "GLM 5 Turbo"),
+            ("glm-5", "GLM 5"),
+            ("glm-4.7", "GLM 4.7"),
+            ("glm-4.6", "GLM 4.6"),
+            ("glm-4.5", "GLM 4.5"),
+            ("glm-4.5-air", "GLM 4.5 Air"),
         ],
     },
     Preset {
@@ -72,6 +80,10 @@ const PRESETS: &[Preset] = &[
         models: &[
             ("k3.1-pro", "K3.1 Pro"),
             ("k3.1-pro-highspeed", "K3.1 Pro Highspeed"),
+            ("k3", "K3"),
+            ("k3-256k", "K3 256K"),
+            ("kimi-for-coding", "K2.8 Preview"),
+            ("kimi-for-coding-highspeed", "K2.7 Code Highspeed"),
         ],
     },
     Preset {
@@ -471,7 +483,7 @@ mod tests {
         .unwrap();
         let r = config::read(&t.path().join("providers.json")).unwrap();
         let catalog = config::catalog(&r).unwrap();
-        assert_eq!(catalog.len(), 16);
+        assert_eq!(catalog.len(), 28);
         for m in catalog {
             assert!(config::anthropic(&m.p).unwrap().is_some());
         }
