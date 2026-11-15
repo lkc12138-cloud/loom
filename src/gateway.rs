@@ -99,6 +99,10 @@ fn transport_error(
 fn header<'a>(h: &'a HeaderMap, k: &str) -> Option<&'a str> {
     h.get(k).and_then(|v| v.to_str().ok())
 }
+fn extension_origin(h: &HeaderMap) -> bool {
+    header(h, "origin")
+        .is_some_and(|o| o.starts_with("chrome-extension://") || o.starts_with("moz-extension://"))
+}
 fn equal(a: &str, b: &str) -> bool {
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
@@ -183,8 +187,8 @@ async fn handle(State(app): State<App>, req: Request) -> Response {
     ]
     .iter()
     .any(|v| Some(v.as_str()) == header(&h, "host"))
-        || h.contains_key("origin")
-        || header(&h, "sec-fetch-site") == Some("cross-site")
+        || (h.contains_key("origin") && !extension_origin(&h))
+        || (header(&h, "sec-fetch-site") == Some("cross-site") && !extension_origin(&h))
     {
         return err(native, 403, "LOCAL_CLIENTS_ONLY");
     }
@@ -769,5 +773,89 @@ mod tests {
                 .contains("UPSTREAM_FIXTURE")
         );
         server.abort();
+    }
+    #[tokio::test]
+    async fn browser_extension_origins_allowed_with_local_key_while_web_origins_rejected() {
+        let d = tempfile::tempdir().unwrap();
+        config::init(d.path()).unwrap();
+        let app = router(App {
+            telemetry: None,
+            upstream_override: None,
+            dir: d.path().into(),
+            port: 4319,
+            permits: Arc::new(tokio::sync::Semaphore::new(8)),
+        });
+        let key = std::fs::read_to_string(d.path().join("hub.key")).unwrap();
+        let bearer = format!("Bearer {}", key.trim());
+
+        for origin in ["https://evil.example", "http://localhost:3000"] {
+            let req = Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("host", "127.0.0.1:4319")
+                .header("origin", origin)
+                .header("authorization", &bearer)
+                .body(Body::empty())
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), 403);
+            let bytes = to_bytes(res.into_body(), 65536).await.unwrap();
+            let v: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(v["error"]["code"], "LOCAL_CLIENTS_ONLY");
+        }
+
+        let cross_site_req = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header("host", "127.0.0.1:4319")
+            .header("sec-fetch-site", "cross-site")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let cross_site_res = app.clone().oneshot(cross_site_req).await.unwrap();
+        assert_eq!(cross_site_res.status(), 403);
+        let cross_site_bytes = to_bytes(cross_site_res.into_body(), 65536).await.unwrap();
+        let cross_site_json: Value = serde_json::from_slice(&cross_site_bytes).unwrap();
+        assert_eq!(cross_site_json["error"]["code"], "LOCAL_CLIENTS_ONLY");
+
+        let ext_no_key_req = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header("host", "127.0.0.1:4319")
+            .header("origin", "chrome-extension://abcdefghijklmnop")
+            .header("sec-fetch-site", "cross-site")
+            .body(Body::empty())
+            .unwrap();
+        let ext_no_key_res = app.clone().oneshot(ext_no_key_req).await.unwrap();
+        assert_eq!(ext_no_key_res.status(), 401);
+        let ext_no_key_bytes = to_bytes(ext_no_key_res.into_body(), 65536).await.unwrap();
+        let ext_no_key_json: Value = serde_json::from_slice(&ext_no_key_bytes).unwrap();
+        assert_eq!(ext_no_key_json["error"]["code"], "LOCAL_KEY_REQUIRED");
+
+        let chrome_ok_req = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header("host", "127.0.0.1:4319")
+            .header("origin", "chrome-extension://abcdefghijklmnop")
+            .header("sec-fetch-site", "cross-site")
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let chrome_ok_res = app.clone().oneshot(chrome_ok_req).await.unwrap();
+        assert_eq!(chrome_ok_res.status(), 200);
+
+        let moz_ok_req = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header("host", "127.0.0.1:4319")
+            .header(
+                "origin",
+                "moz-extension://12345678-1234-1234-1234-1234567890ab",
+            )
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap();
+        let moz_ok_res = app.oneshot(moz_ok_req).await.unwrap();
+        assert_eq!(moz_ok_res.status(), 200);
     }
 }
