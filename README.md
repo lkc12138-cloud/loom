@@ -1,50 +1,38 @@
 # Loom
 
-包含 Rust 模型统一网关和本机可观测管控台。**不包含额度面板、浏览器扩展、账号用量采集或默认放行脚本。** 不需要 Node.js。
+English | [简体中文](./README.zh-CN.md)
 
-统一访问 OpenAI Chat Completions 与 Anthropic Messages；上游 Key 保存在本机，agent 只引用入口 Key。固定回环监听，拒绝浏览器跨站请求，不跨 provider 回退、不自动重试生成。
+**A local-only unified Rust model gateway and loopback observability console.**
 
-## 安装与启动
+Loom routes OpenAI Chat Completions and Anthropic Messages traffic through a single loopback daemon (`127.0.0.1:4319`) while keeping upstream provider API keys on local disk (`0600` files inside a `0700` data directory). Agents only reference a local hub entry key (`hub.key`). Built entirely in Rust (`edition = "2024"`, Rust `1.89+`), Loom requires no Python or Node.js to install, run, or auto-start.
 
-从源码构建需要 [Rust 工具链](https://rustup.rs/)。安装、自启动和运行均由 Rust 完成，**不需要 Python 或 Node.js**：
+---
 
-```sh
-./setup.sh        # 首次交互安装自动进入供应商向导，然后安装并启用自启动
-loom status
-```
+## Overview & Explicit Non-Goals
 
-首次安装只需回车选择全部，再逐项粘贴 Key（隐藏输入）；没有 Key 就回车跳过。名称、Base URL、计费来源和模型列表自动填好，随后自动同步 pi / opencode2 及已有 Claude Code 设置。已有供应商配置时，安装与更新不再询问 Key，也不会套用预设覆盖原配置。非交互安装不启动向导，安装后在本机终端运行 `loom add`。
+Loom is strictly scoped to **model routing, local client synchronization, and loopback request/session observability**:
 
-## 添加供应商 / 更换 Key
+- **Loopback-only surface**: The inference gateway binds to `127.0.0.1:4319` and the management console binds to `127.0.0.1:4320`.
+- **No silent fallbacks or retries**: Different billing channels are never mixed, requests never fall back across providers, and generation is never retried automatically.
+- **Explicit non-goals**: Loom **does not** include a vendor quota dashboard, account usage scraping, browser extensions, or agent auto-approval/permission-bypass launchers.
+- **Compatibility naming**: The project, repository (`xdlkc/loom`), and primary binary are named **Loom** (`loom`), while `modelhub` is retained as a command symlink alias alongside the `hub/` client provider prefix, default port `4319`, and default `ModelHub` data directories so existing agents and key paths continue working without migration breakage.
 
-```sh
-loom add                       # 默认全部；也可输入 1,4 等编号多选
-loom add zenmux deepseek        # 只询问这两家的 Key
-loom add kimi                  # 已配置时，输入新 Key 更换；回车保留
-loom add longcat               # 美团 LongCat；只需隐藏输入开放平台 Key
-```
+---
 
-`loom configure` 是 `loom add` 的别名。不用填写名称、地址、模型 ID；输入的 Key 不显示、不放进命令参数，不接受管道传入。每家保存后立即落盘，未填 Key 的新供应商不会创建；已存在的供应商只轮换 Key，保留模型、地址、名称、启用状态及其他设置。旧 Key 仅在本机私密备份。重新运行向导可以继续未完成的配置。
+## Quick Start
 
-| 编号 | 供应商 | 需要的 Key | 自动配置的模型 |
-| --- | --- | --- | --- |
-| 1 | ZenMux | 推理 API Key，非 Management Key | Claude 5.5 系列 + 公共目录中的 Muse Wonder、Ling 3.1 Flash、MiMo V2.6 Flash / Pro |
-| 2 | GLM 国内 Coding Plan | 该套餐的 API Key | GLM 5.3 / Flash / FlashX、5.2 / 5.1 / 5-Turbo / 5、4.7 / 4.6 / 4.5 / 4.5 Air |
-| 3 | MiniMax 国内订阅 | Subscription Key | MiniMax M3.1 Flash |
-| 4 | DeepSeek API 钱包 | 开放平台 API Key | DeepSeek Flash / V4 Pro |
-| 5 | Kimi Code 国内订阅 | Kimi Code API Key，非 Moonshot Key | K3.1 Pro / Highspeed、K3 / K3 256K、K2.8 Preview / K2.7 Code Highspeed |
-| 6 | LongCat 美团开放平台 | LongCat API Key，非网页登录令牌 | LongCat-2.5 |
+Building from source requires the [Rust toolchain](https://rustup.rs/) (and a C compiler such as Xcode Command Line Tools on macOS or `cc` on Linux for bundled SQLite).
 
-预设是公共接入信息，不代表账号已获所有模型权限；模型权限仍由上游套餐决定，不自动发送付费测试请求。上下文 128K、最大输出 8K、文本输入是保守初始设置，可在中央配置中调整。不同套餐不混用、不跨供应商回退。预设来源：[ZenMux](https://zenmux.ai/docs/guide/quickstart.html)、[GLM Coding Plan](https://docs.bigmodel.cn/cn/coding-plan/quick-start)、[MiniMax](https://platform.minimax.cn/docs/m-plan/quickstart)、[DeepSeek](https://api-docs.deepseek.com/quick_start/pricing-details-cny/)、[Kimi Code](https://www.kimi.com/code/docs/)、[LongCat](https://longcat.chat/platform/docs/zh/)。
-
-其他供应商、海外站点或 API 钱包独立接入仍可手动配置：
+### Interactive Install & Autostart
 
 ```sh
-loom add --custom              # 高级配置；显示名称默认采用供应商标识
-loom set-key local-zenmux       # 按准确的供应商 ID 隐藏输入更换 Key
+./setup.sh        # Builds release binary, runs interactive provider wizard on first setup, installs & starts service
+loom status       # Verifies http://127.0.0.1:4319/health
 ```
 
-无自启动需求时，直接运行 Rust 二进制：
+On first interactive setup, `./setup.sh` launches the provider onboarding wizard: press Enter to select all presets (or choose indices such as `1,4`), paste each API key with hidden input (or press Enter to skip), and Loom fills in endpoints, billing metadata, and default models before syncing `pi`, `opencode2`, and existing Claude Code configurations. Existing provider entries are never overwritten on reinstall or upgrade.
+
+### Manual Build & Foreground Run
 
 ```sh
 cargo build --release --locked
@@ -53,26 +41,96 @@ cargo build --release --locked
 ./target/release/loom serve
 ```
 
-服务安装器只操作 `local.model-access.hub`；不会启停额度工具。已有网关配置直接沿用：macOS `~/Library/Application Support/ModelHub/.local`；Linux `~/.local/share/ModelHub/.local`。可通过 `--data-dir` 或 `MODEL_HUB_DATA_DIR` 指定独立目录。升级前备份二进制和启动项。Key 0600、私有目录 0700；不要上传此目录或备份。
+### User Service Installer & One-Command Update
 
-## API
+```sh
+loom install              # Installs binary to ~/.local/bin/{loom,modelhub} and registers user autostart
+loom install --no-start   # Deploys files and service unit without touching a running service
+loom update               # Clones main from github.com/xdlkc/loom, builds --release --locked, verifies keys unchanged, and restarts
+```
 
-- OpenAI Base URL：`http://127.0.0.1:4319/v1`，`POST /chat/completions`。
-- Anthropic Base URL：`http://127.0.0.1:4319`，`POST /v1/messages`。
-- `GET /v1/models`：模型目录；Anthropic 请求头返回其原生列表格式。
-- `GET /health`：无需 Key 的本机健康检查，包含 `runtime: rust`。
-- 请求凭据：入口 Key 的 `Authorization: Bearer ...`；Messages 也支持 `x-api-key`，冲突凭据拒绝。
-- 请求模型使用 `zenmux/anthropic/claude-sonnet-5.5` 等中央 ID；agent 的 `hub/` 是客户端 provider 前缀。
+The installer uses macOS `launchctl` (`~/Library/LaunchAgents/local.model-access.hub.plist`) or Linux `systemctl --user` (`~/.config/systemd/user/local.model-access.hub.service`) under label `local.model-access.hub` without root privileges. Before overwriting, binaries, unit files, and configs are backed up privately; if health checks fail, Loom attempts rollback to the prior version. `loom update` builds inside `<data-dir>/updates/` under an exclusive lockfile (`update.lock`) without modifying your local Git checkout.
 
-SSE 增量透传；思考、工具调用、图片、缓存参数和厂商字段原样透传，不转换思考强度。`max_tokens` 受中央模型输出上限约束。上游不支持的参数可能报错。仅支持上述推理接口，不声明支持整个 Anthropic 平台或自动审批服务。
+---
 
-原生 Anthropic 路由已映射 ZenMux、GLM Coding Plan、MiniMax、DeepSeek、Kimi Code、LongCat；自定义 provider 可配置 `anthropicBaseURL`。只接受 HTTPS 上游、不跟随重定向；请求正文可按采集设置保存于本机私有数据库；Key 与认证头不进入观测数据，也不写程序输出。每次请求重新读取配置；本机配置变化时自动更新客户端目录。运行中的客户端可能需重启或刷新列表。
+## Supported Providers & Bundled Catalogs
 
-LongCat 的 OpenAI 地址为 `https://api.longcat.chat/openai/v1`，Anthropic 地址为 `https://api.longcat.chat/anthropic`，两条上游路由均使用 Bearer 认证。pi 通过预设兼容项显式发送 `thinking.type: enabled / disabled`，不发送未声明支持的 `reasoning_effort`；`thinking_budget` 等原始字段继续透传。该 Key 用于模型调用，额度工具不会把模型列表查询当作余额验证。
+Use `loom add` (alias `loom configure`) to add preset providers or rotate keys via hidden prompt input (`--custom` adds unlisted HTTPS endpoints):
 
-## 中央配置
+```sh
+loom add                       # Interactive selection (all presets by default)
+loom add zenmux deepseek        # Prompt only for selected presets
+loom add kimi                  # Rotate key on an existing preset (Enter to keep current key)
+loom add longcat               # Configure Meituan LongCat with hidden Open Platform key input
+loom add --custom              # Configure a custom HTTPS OpenAI/Anthropic provider
+```
 
-`providers.json` 格式沿用此前网关：
+| # | Preset ID | Provider | Required Credential | Default / Bundled Models |
+| --- | --- | --- | --- | --- |
+| 1 | `zenmux` | ZenMux | Inference API Key (not Management Key) | Claude 5.5 series (`claude-sonnet-5.5`, `claude-opus-5.5`, `claude-haiku-5.5`) + bundled `meta/muse-wonder-1.0`, `inclusionai/ling-3.1-flash`, `xiaomi/mimo-v2.6-flash`, `xiaomi/mimo-v2.6-pro` |
+| 2 | `glm` | GLM Coding Plan | Coding Plan API Key | `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`, `glm-5.2`, `glm-5.1`, `glm-5-turbo`, `glm-5`, `glm-4.7`, `glm-4.6`, `glm-4.5`, `glm-4.5-air` |
+| 3 | `minimax` | MiniMax Subscription | Subscription Key | `MiniMax-M3.1-Flash` |
+| 4 | `deepseek` | DeepSeek API Wallet | Open Platform API Key | `deepseek-flash`, `deepseek-v4-pro` |
+| 5 | `kimi` | Kimi Code Subscription | Kimi Code API Key (not Moonshot Open Platform Key) | `k3.1-pro`, `k3.1-pro-highspeed`, `k3`, `k3-256k`, `kimi-for-coding`, `kimi-for-coding-highspeed` |
+| 6 | `longcat` | LongCat Open Platform | LongCat API Key (not web session token) | `LongCat-2.5` |
+
+Preset references: [ZenMux](https://zenmux.ai/docs/guide/quickstart.html), [GLM Coding Plan](https://docs.bigmodel.cn/cn/coding-plan/quick-start), [MiniMax](https://platform.minimax.cn/docs/m-plan/quickstart), [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing-details-cny/), [Kimi Code](https://www.kimi.com/code/docs/), and [LongCat](https://longcat.chat/platform/docs/zh/). Preset defaults use `128000` context window and `8192` max output tokens unless overridden in `providers.json` or the bundled catalogs.
+
+### Bundled Multi-Machine Catalogs
+
+Loom embeds [catalog/zenmux.json](catalog/zenmux.json), [catalog/glm.json](catalog/glm.json), and [catalog/kimi.json](catalog/kimi.json) at compile time:
+
+- Existing providers matching those official `baseURL` endpoints automatically receive newly bundled models at runtime without modifying your private `providers.json` or key files.
+- Machines without a configured provider will not auto-create one.
+- Local entries with the same `id` always take precedence (preserving custom names, context/output limits, and `"enabled": false` overrides).
+- Set `"includeBundledModels": false` on a provider to opt out of runtime catalog supplementation completely.
+
+---
+
+## OpenAI & Anthropic Gateway API
+
+- **OpenAI Base URL**: `http://127.0.0.1:4319/v1` (`POST /v1/chat/completions`)
+- **Anthropic Base URL**: `http://127.0.0.1:4319` (`POST /v1/messages`)
+- **Model Directory**: `GET /v1/models` (returns Anthropic-native model list format when Anthropic headers such as `anthropic-version` or `x-api-key` are present; OpenAI list format otherwise)
+- **Health Check**: `GET /health` (unauthenticated loopback probe returning `{"ok":true,"service":"local-model-hub","runtime":"rust"}`)
+- **Gateway Authentication**: Local hub key (`hub.key`) via `Authorization: Bearer <hub-key>`; `/v1/messages` also accepts `x-api-key`, rejecting conflicting credentials (`401`).
+- **Model Routing**: Request models by central ID such as `zenmux/anthropic/claude-sonnet-5.5` (clients under `hub` resolve `hub/<provider>/<model>`).
+
+### Protocol & Diagnostic Behavior
+
+- **Byte-for-byte streaming passthrough**: SSE chunks, reasoning fields, tool calls, images, cache hints, and vendor fields are forwarded untouched; `max_tokens` (or `max_completion_tokens`) is clamped to the model's configured `maxTokens` ceiling. Request bodies are capped at `20 MiB` (`30s` read timeout), responses at `64 MiB`, and concurrent in-flight inference requests at `8` semaphore permits (`429 LOCAL_CONCURRENCY_LIMIT`).
+- **Native Anthropic routes**: Mapped automatically for ZenMux (`https://zenmux.ai/api/anthropic`), GLM (`https://open.bigmodel.cn/api/anthropic`, `https://api.z.ai/api/anthropic`), MiniMax (`https://api.minimax.cn/anthropic`, `.minimaxi.com`, `.minimax.io`), DeepSeek (`https://api.deepseek.com/anthropic`), Kimi Code (`https://api.kimi.com/coding`), and LongCat (`https://api.longcat.chat/anthropic`, using Bearer authentication per upstream requirement), or custom `anthropicBaseURL`.
+- **Upstream `402` explanations**: Returns HTTP `402` (`UPSTREAM_402`) with safe, whitelisted category hints (`subscription_quota_exhausted`, `insufficient_credit`, or `payment_required`) without leaking raw upstream prose.
+- **Transport `502` diagnostics**: Returns HTTP `502` (`UPSTREAM_UNAVAILABLE`) classified into fixed categories (`timeout`, `request_invalid`, `tls_error`, `dns_error`, `connect_failed`, `transport_failed`) without exposing upstream URLs or credentials.
+
+---
+
+## Local Observability & Management Console
+
+```sh
+loom console                             # Opens http://loom.localhost:4320/ with a one-use login ticket
+loom console --host 127.0.0.1            # Fallback host if browser does not resolve *.localhost
+```
+
+The management console listens separately on `127.0.0.1:4320` (configurable via `--admin-port` on `loom serve`). `loom console` exchanges `hub.key` over `POST /api/launch` (blocked if `Origin` is present) for a 60-second single-use ticket, which the browser swaps at `POST /api/login` for an 8-hour `HttpOnly; SameSite=Strict` session cookie (`loom_console`).
+
+- **Overview**: Filter by time window (`24h` / `7d` / `30d`), provider, model, and harness; view input/output token curves, cache read/write breakdown, token-weighted cache hit rate, average TTFT, P50/P95 latency, and success/error counts. Unknown usage stays unknown (`—`), reasoning tokens are never double-counted into output totals, and vendor wallet balances are never fabricated.
+- **Requests**: Inspect stage timings (`authenticated`, `routed`, `dispatch`, headers, TTFT, completion), sanitized client request payloads, forwarded payloads (credentials excluded), full response/SSE logs, and jump to linked sessions.
+- **Sessions**: Background worker polls every 15 seconds (read-only) to import native transcripts from `~/.pi/agent/sessions`, `~/.claude/projects`, and `~/.local/share/opencode/opencode.db` (supporting both OpenCode V2 `session_v2`/`session_message` and V1 `message`/`part` schemas). Native imports are linked deterministically via session headers (`x-loom-harness`, `x-loom-session-id` from [integrations/pi.ts](integrations/pi.ts) and [integrations/opencode2.ts](integrations/opencode2.ts)) or Claude Code metadata/response IDs—never guessed by prompt similarity and never double-counted into gateway metrics.
+- **Capture Settings**: Independently toggle request/response body capture and native session import, and configure retention (`1–3650` days, default `30` days).
+
+Observations are stored locally in `<data-dir>/observability/traces.sqlite3` (`0600` inside `0700`) with secret/token redaction applied prior to persistence and a `16 MiB` per-response capture cap (`truncated: true` if exceeded). See [docs/observability.md](docs/observability.md) for the specification and metrics rules, and [prototypes/session-workspace/README.md](prototypes/session-workspace/README.md) for the synthetic frontend session-workspace prototype.
+
+---
+
+## Central Configuration & CLI Reference
+
+Default data directory locations (override via `--data-dir <path>` or `MODEL_HUB_DATA_DIR`):
+
+- **macOS**: `~/Library/Application Support/ModelHub/.local`
+- **Linux**: `~/.local/share/ModelHub/.local`
+
+Example `providers.json`:
 
 ```json
 {
@@ -83,42 +141,72 @@ LongCat 的 OpenAI 地址为 `https://api.longcat.chat/openai/v1`，Anthropic �
       "name": "My provider",
       "baseURL": "https://provider.example/v1",
       "anthropicBaseURL": "https://provider.example/anthropic",
-      "billing": "独立 API 钱包",
+      "billing": "API Wallet",
       "enabled": true,
       "keyFile": "/absolute/path/to/local/key",
-      "models": [{"id": "model-id", "name": "Model", "contextWindow": 128000, "maxTokens": 8192, "input": ["text"]}]
+      "models": [
+        {
+          "id": "model-id",
+          "name": "Model",
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "input": ["text"],
+          "reasoning": true
+        }
+      ]
     }
   }
 }
 ```
 
-`proxy` 留空直连；需要代理时在本机配置 URL。0.7.2 起可用 `loom proxy` 查看当前模式、`loom proxy http://127.0.0.1:7890` 设置持久代理（7890 需换成自己代理软件的实际 HTTP / Mixed 端口）、`loom proxy off` 恢复直连。下一次请求即生效，无需重启，保留全部 provider、Key 和客户端配置。命令拒绝携带用户名、密码、查询参数和自定义路径的代理 URL；不打印完整代理地址。Loom 明确不读取终端 `HTTP_PROXY` / `HTTPS_PROXY`，自启动服务也不依赖当前终端的环境。不要把 Key 放进 URL。供应商向导只使用公共预设，不携带任何账号的预填 Key、真实套餐、消费记录或模型权限保证。Management Key 不能用于模型推理。
+### Proxy & Key Commands
 
-`loom set-key local-demo` 隐藏输入轮换 Key。`loom check` 检查配置及 Key 文件是否存在，不验证推理权限。`sync` 保留无关客户端配置、OAuth 和权限模式，修改前私密备份；不强制改变既有默认模型或接管其他 provider。
+```sh
+loom proxy                                # Show current mode (direct or persistent proxy configured)
+loom proxy http://127.0.0.1:7890          # Set persistent HTTP/HTTPS proxy (takes effect on next request)
+loom proxy off                            # Restore direct upstream connections
+loom set-key local-demo                   # Rotate upstream API key via hidden input (backs up old key)
+loom check                                # Validate providers.json and confirm every keyFile exists
+```
 
-0.7.3 修复通过本机入口访问 DeepSeek 时的客户端思考控制：`loom sync` 根据实际上游 `api.deepseek.com` 为 pi 写入 `compat.thinkingFormat: "deepseek"`，关闭时明确发送 `thinking.type: "disabled"`，开启时发送 `enabled` 及思考强度。按[官方映射](https://api-docs.deepseek.com/guides/thinking_mode/)将 minimal 映射到 low、medium / xhigh 映射到 high，max 保留 max。自定义 `piCompat` 和模型级 `compat` / `thinkingLevelMap` 继续生效，模型级设置优先。不会修改用户的默认档位或按模型保存的偏好。旧 pi 若不识别这些字段，需要先升级 pi。
+Loom explicitly builds upstream clients with `.no_proxy()` and **ignores** terminal `HTTP_PROXY` / `HTTPS_PROXY` environment variables so background autostart services behave identically regardless of shell environment. `loom proxy` rejects URLs containing embedded usernames, passwords, query strings, fragments, non-root paths, or non-HTTP(S) schemes, and never echoes the full proxy URL.
 
-OpenCode V2 同时获得 `capabilities.reasoning` 对象（不是布尔值）；DeepSeek 提供 none / low / high / max 档位，并声明 `reasoning_content` 的读取与回传。其他模型只同步其已有能力声明，不推断未核实的控制档位。更新后重开 pi / opencode2；现有 pi 会话可能保留自己的档位，可用 `/thinking` 调整。DeepSeek 未收到开关时会按上游默认开启思考，因此界面 off 必须显式发送关闭参数；网关本身仍不转换这些参数。
+---
 
-已在 OpenCode 2.1.4 的本机模型 API 核实四个档位及其请求体。该版本仍未在运行时 `capabilities` 中暴露 reasoning 属性，故不能用“是否显示推理徽标”判断开关是否生效；Loom 的配置声明不会修复客户端自身的徽标显示缺陷。
+## Client Sync & Reasoning Compatibility
 
-可选的真实 pi SDK 出站回归测试（只访问本机模拟接口，不读取真实 Key）：
+Running `loom sync` (or updating `providers.json` while `loom serve` watches it every 2 seconds) safely updates client configs with private backups under `<data-dir>/backups/`:
+
+- **pi** (`~/.pi/agent/models.json`, `~/.pi/agent/settings.json`) and observability extension `~/.pi/agent/extensions/loom-observability.ts` ([integrations/pi.ts](integrations/pi.ts), using `before_provider_headers`).
+- **OpenCode V2** (`~/.config/opencode/opencode.json`, or comment-free `~/.config/opencode/opencode.jsonc`; refuses to overwrite if `opencode.jsonc` has comments or both files exist) and plugin `~/.config/opencode/plugins/loom-observability/index.ts` ([integrations/opencode2.ts](integrations/opencode2.ts), using `ctx.session.hook("http.request")`).
+- **Claude Code** (`~/.claude/settings.json`, updated only if it already exists, preserving themes, permissions, and unrelated OAuth/providers).
+
+### DeepSeek & LongCat Thinking Controls
+
+Because clients connect only to `127.0.0.1`, URL-based vendor detection inside client SDKs cannot recognize DeepSeek or LongCat behind the gateway. `loom sync` detects the actual upstream host from `providers.json` and emits explicit client capabilities:
+
+- **DeepSeek (`api.deepseek.com`)**: Sets `compat.thinkingFormat: "deepseek"` and `thinkingLevelMap` (`minimal -> low`, `low -> low`, `medium/high/xhigh -> high`, `max -> max`) for `pi`, and emits `capabilities.reasoning` object plus `none` / `low` / `high` / `max` `variants` (`thinking.type: "disabled"` vs `"enabled"`) for OpenCode V2 without overriding user defaults. Custom `piCompat` and model-level `compat` / `thinkingLevelMap` remain supported.
+- **LongCat (`api.longcat.chat`)**: Preset configures `piCompat: {"thinkingFormat": "deepseek", "supportsReasoningEffort": false}` so `pi` toggles `thinking.type` (`enabled`/`disabled`) without sending unsupported `reasoning_effort`.
+
+Run the optional real `pi-ai` SDK loopback verification (uses a local mock server, no real keys or upstream calls):
 
 ```sh
 node tests/pi-thinking.mjs target/debug/loom /path/to/@earendil-works/pi-ai
 ```
 
-## 多台机器的模型目录
+---
 
-从 0.6.0 起，[catalog/zenmux.json](catalog/zenmux.json)、[catalog/glm.json](catalog/glm.json) 与 [catalog/kimi.json](catalog/kimi.json) 随 Loom 一起发布公共模型目录。已有对应官方端点的 ZenMux（`https://zenmux.ai/api/v1`）、GLM Coding Plan（`https://open.bigmodel.cn/api/coding/paas/v4`）和 Kimi Code（`https://api.kimi.com/coding/v1`）provider 会在运行时自动补充缺失模型（如 GLM 5.2 / 5.1 / 5-Turbo / 5 / 4.7 / 4.6 / 4.5 / 4.5 Air 与 Kimi K3 / K3 256K / K2.8 Preview / K2.7 Code Highspeed）；未配置的机器不会自动创建 provider。私有 `providers.json` 和 Key 文件仍留在各台机器，不进入仓库，也不会因为更新公共目录而被改写。
+## Security Model
 
-其他机器执行 `loom update` 后，新网关会自动把有效目录同步到 pi / opencode2 和已有 Claude Code 设置。不必重新输入 Key 或重新添加 provider；已经打开的 agent 需要退出重开，以加载更新后的模型列表。手动运行 `loom sync` 也使用同一目录，旧版 `loom sync` 只同步本机旧配置，不能获取新版目录。
+- **Permissions**: Private data directories are enforced at `0700`; `hub.key`, `providers.json`, upstream key files, backups, and `observability/traces.sqlite3` are written atomically with `0600` (`PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON`).
+- **Host & Origin isolation**:
+  - Gateway (`4319`) enforces loopback `Host` (`127.0.0.1:4319` / `localhost:4319`) and rejects browser `Origin` and `sec-fetch-site: cross-site` requests except `chrome-extension://` and `moz-extension://` origins carrying the local `hub.key`.
+  - Console (`4320`) enforces exact `Host` (`loom.localhost:4320`, `localhost:4320`, `127.0.0.1:4320`), strict same-origin `Origin == http://<Host>`, no CORS headers, strict CSP (`default-src 'self'; script-src 'self'; ...`), and `X-Frame-Options: DENY`.
+- **Upstream validation**: Only `https://` URLs without credentials, query parameters, or fragments are accepted; HTTP redirects are disabled (`Policy::none()`). Upstream keys are never written to client configs, telemetry databases, or terminal output.
 
-目前公共目录中 ZenMux 补充 `meta/muse-wonder-1.0`、`inclusionai/ling-3.1-flash`、`xiaomi/mimo-v2.6-flash` 和 `xiaomi/mimo-v2.6-pro`，GLM 补充 `glm-5.3` / `5.3-flash` / `5.3-flashx` / `5.2` / `5.1` / `5-turbo` / `5` / `4.7` / `4.6` / `4.5` / `4.5-air`，Kimi Code 补充 `k3.1-pro` / `k3.1-pro-highspeed` / `k3` / `k3-256k` / `kimi-for-coding` / `kimi-for-coding-highspeed`。Clef Omni 只支持 Decisions API，当前不作为聊天模型发布。
+---
 
-本机 `models` 中同 ID 的条目始终优先，名称、上下文、输出上限、停用状态和默认模型均保留。隐藏一个公共模型时，在该 provider 的 `models` 中加入相应 ID 和 `"enabled": false`；只从本机数组删除条目会重新显示公共默认值。若希望完全自行维护该供应商的模型列表，在 provider 上设置 `"includeBundledModels": false`。自定义端点不自动套用 ZenMux 公共目录。
-
-## 验证与发布范围
+## Verification & Ecosystem
 
 ```sh
 cargo test --locked
@@ -126,85 +214,4 @@ cargo fmt --check
 cargo clippy --locked -- -D warnings
 ```
 
-本仓库早期历史曾包含额度工具；当前分支只分发 Rust 网关。旧源码可从历史提交恢复，未重写远端历史；本机额度服务保持独立。Rust 版可在独立端口/配置目录验证后，再用安装器迁移运行服务。
-
-项目与命令名称为 **Loom**，仓库为 `xdlkc/loom`。已有 `modelhub` 命令作为兼容别名保留；`hub/` 模型前缀、4319 端口和历史 ModelHub 配置目录不改名，避免现有 agent 和密钥路径失效。
-
-## Rust 安装器
-
-```sh
-loom install                       # 当前二进制安装到用户目录并配置自启动
-loom install --no-start            # 只部署及生成启动项，不操作正在运行的服务
-```
-
-旧版 Loom 没有 `install` 子命令时，先在源码目录 `git pull --ff-only`，再运行 `./setup.sh`。已构建的独立二进制无需 Rust 工具链即可执行 `install`。安装器使用操作系统自带的 macOS `launchctl` 或 Linux `systemctl --user`，不需要管理员权限；Linux 要有可用的 systemd 用户会话。
-
-安装器保留现有 `providers.json`、入口 Key、上游 Key、客户端设置和 OAuth；配置有误时在停止旧服务前退出。覆盖前将程序、启动项、命令链接信息备份到本机私有目录；启动项加载或健康检查失败会尝试恢复旧文件及原服务，并报告备份位置。首次安装失败会撤销新服务。恢复也失败时需根据该私密备份手动处理，不能承诺系统服务管理器故障时自动恢复一定成功。
-
-macOS 安装会等待旧任务卸载再重试加载，避免错误 5 的清理竞态。只操作网关启动项 `local.model-access.hub`，不操作额度服务。
-
-0.3.0 起安装器为纯 Rust。测试包含 macOS/Linux 启动项生成、卸载等待与重试、安装失败恢复、空 PATH 安装、对已安装二进制自身升级以及原配置/Key 字节不变。Linux systemd 真机启动仍需在目标机器确认。
-
-## 一条命令更新
-
-从 0.4.0 开始：
-
-```sh
-loom update
-```
-
-自动从 `https://github.com/xdlkc/loom.git` 的 `main` 获取源码，使用 `cargo build --release --locked` 构建，然后由新二进制执行 `loom install`，备份旧版本并重启服务。保留 provider 配置、入口 Key、上游 Key、客户端配置和 OAuth；安装器的健康检查失败时尝试恢复旧版本。更新前后对配置和 Key 做本机内容比对，不打印凭据。
-
-需要本机已安装 Git 和 Rust 1.89+，并具有私有仓库访问权限（GitHub CLI 用户可先执行 `gh auth login`、`gh auth setup-git`）。构建需要访问 crates.io；自动更新不会安装系统依赖，也不需要 Python / Node.js。依赖缺失或网络/构建失败时旧服务保持运行，终端会给出失败阶段。
-
-源码临时目录和编译缓存位于私有配置目录的 `updates/` 中，不使用或修改原来的 Git 工作副本。临时源码在成功或失败后清理，编译缓存保留以加快后续更新；独占文件锁防止同时更新，进程结束后自动释放。只有构建完成且配置/Key 未发生变化时才开始替换；本机设置正在编辑时可能中止更新，重试即可。
-
-0.3.x 或更早版本还没有 `update` 命令，需要最后手动升级一次：
-
-```sh
-cd /path/to/your/loom-checkout
-git remote set-url origin https://github.com/xdlkc/loom.git
-git pull --ff-only
-./setup.sh
-```
-
-此后可在任意目录直接运行 `loom update`。
-
-
-## 本机可观测与会话管控（0.7.0）
-
-### 排查上游 402（0.7.1）
-
-`UPSTREAM_402` 表示模型供应商返回了 HTTP 402；`loom add` 只保存配置，不会迁移其他机器的账户权益或验证套餐余量。运行 `loom console`，在“请求”选择对应模型最近的失败记录，展开“上游 → 客户端”查看本机脱敏后的 `upstream_error`。不要复制 Key、完整请求或原始日志到聊天。
-
-0.7.1 起，pi / Claude Code 收到的错误说明会区分已识别的 `subscription_quota_exhausted`（额度耗尽）、`insufficient_credit`（余额不足 / 欠费）与原因尚未确认的 `payment_required`。保留 HTTP 402 和 `UPSTREAM_402` 机器码；仅将白名单错误类型转换为固定提示，不回显供应商任意错误文本。未知原因继续显示未知，不自动重试或切到其他付费通道。`loom update` 会安装修复并保留现有 Key；它不会恢复供应商额度。
-
-ZenMux 的 `quote_exceeded`、`insufficient_credit` 和 `reject_no_credit` 的区别见[官方错误文档](https://zenmux.ai/docs/guide/advanced/error-codes.html)。Kimi 预设使用国内 Kimi Code 的 `https://api.kimi.com/coding/v1`，需要 Kimi Code 控制台签发的 Key；Moonshot 开放平台 Key 与会员订阅不共用，详见[官方接入说明](https://www.kimi.com/code/docs/en/)。
-
-### 排查上游连接失败（0.7.2）
-
-HTTP 502 `UPSTREAM_UNAVAILABLE` 表示发送请求时未取得有效上游响应，不能据此判断余额、Key 或供应商整体故障。0.7.2 保留状态码和机器码，并在消息中提供固定的 `connect_failed` / `dns_error` / `tls_error` / `timeout` / `request_invalid` / `transport_failed` 类别，记录到本机请求详情中；不显示底层错误原文、URL 或凭据。分类属于诊断提示，未知原因保持未知。TLS 问题应检查时间、证书链和代理，不关闭证书验证。
-
-在报错机器用 `curl --noproxy '*' --connect-timeout 8 --max-time 12 -sS -o /dev/null -w 'HTTP %{http_code}\n' https://zenmux.ai/api/v1/models` 无 Key 检查直连，再去掉 `--noproxy '*'` 比较当前终端网络。401 / 403 等 HTTP 响应仅说明这次 curl 连通，不证明 Key、套餐和 Loom 的 TLS 环境正常；HTTP 000、DNS 或 TLS 错误则先排查网络。若只有代理路径可达，设置 `loom proxy` 为本机实际 HTTP / Mixed 代理端口后再试。代理设置不触发自动重试或跨供应商付费回退。
-
-### 打开管控台
-
-```sh
-loom update                 # 更新并重启；已有配置与密钥保留
-loom console                # 安全打开本机管控台，不输出入口 Key 或登录票据
-```
-
-网关仍在 `127.0.0.1:4319`，管控台使用独立的 `127.0.0.1:4320`，浏览器固定入口为 **http://loom.localhost:4320/**。运行 `loom console` 会打开该域名并安全登录；Chrome 中无需修改 hosts、系统 DNS 或申请域名，服务仍仅监听本机。首次访问、登录过期或服务重启后，请重新运行 `loom console`；浏览器以一次性票据换取 HttpOnly / SameSite 会话，刷新页面不必重新输入 Key。若浏览器不支持该本地域名，可运行 `loom console --host 127.0.0.1` 使用原地址。不开放 CORS，不支持公网监听，不改变现有 agent 审批模式。
-
-- **概览**：供应商 / 模型 / harness / 时间筛选，输入与输出 Token 曲线、缓存读写、Token 加权命中率、首 Token 延迟、请求耗时 P50 / P95、成功与异常。缺失 usage 显示未知；reasoning 是输出细分，不二次相加。厂商订阅剩余百分比、API 钱包余额与真实 Token 消耗不混用，也不将未知美元费用显示为零。
-- **请求**：每个调用的接收、认证、路由、请求准备、上游响应、首字节、首 Token、完成阶段；客户端请求、上游转发参数、响应 / SSE、错误、取消与不完整状态。点击关联会话可继续下钻。
-- **会话轨迹**：只读导入 pi / Claude Code 的 JSONL，以及 opencode2 V2 的 SQLite（兼容 V1 message / part）；保留消息、工具输入、工具结果、分支 parent ID、压缩与其他原生事件。支持搜索与分页；完整事件 JSON 可展开。原生文件未保留的会话只能展示网关请求，不能恢复已丢失的工具记录。历史导入不会混入全局网关计量，避免重复计数。
-- **采集设置**：分别控制请求 / 响应正文和原生会话导入，保留期默认为 30 天（1–3650 天），后台每 15 秒检查原生轨迹并清理到期副本。清理不修改 harness 原始文件。关闭正文采集只影响之后的请求，已有副本按保留期清理。
-
-`loom sync` / 网关启动会部署仅用于关联的本机 pi 扩展和 opencode2 V2 插件，并保留原有插件、OAuth、默认模型及权限设置。pi 使用官方 `before_provider_headers`；OpenCode V2 使用 `ctx.session.hook("http.request")`；只向本机 hub 请求附加 session 标识，网关不再转发这些标识。Claude Code 从原生请求 metadata / transcript 响应 ID 精确关联。导入默认路径为 `~/.pi/agent/sessions`、`~/.claude/projects`、`~/.local/share/opencode/opencode.db`（或 `opencode2`）；当前用户自定义的其他存储根目录不自动扫描。
-
-会话工作台的独立交互原型保存在 [`prototypes/session-workspace`](prototypes/session-workspace)。会话列表、对话回放、时间轴和步骤详情共享选择状态；使用合成演示数据，不接入真实会话或密钥，不替换当前生产控制台。
-
-观测数据位于原私有数据目录下 `observability/traces.sqlite3`（文件 0600、目录 0700）。完整轨迹可能包含代码、提示词与工具输出；只保存在本机，先移除已知入口 / 上游凭据、认证字段及常见 token 模式，不上传仓库或厂商。程序输出只记录安全状态。正文的观测副本上限为每响应 16 MiB；超过上限显式标注截断，不影响原始推理字节透传。会话和请求不会凭提示词相似度猜测关联。
-
-从源码构建 SQLite bundled 依赖需要 C 编译器（macOS Xcode Command Line Tools，Linux `cc`）；Loom 安装与运行仍不需要 Python / Node.js。内置 TS 适配器由对应 harness 自己加载。调研、指标口径和验收范围见 [docs/observability.md](docs/observability.md)。
+In the local tool ecosystem, Loom serves as the unified loopback model gateway for applications such as [`verba`](https://github.com/xdlkc/verba), [`gloss`](https://github.com/xdlkc/gloss), and [`llm-texas-holdem`](https://github.com/xdlkc/llm-texas-holdem).
