@@ -19,18 +19,24 @@ Loom is strictly scoped to **model routing, local client synchronization, and lo
 
 ---
 
-## Quick Start
+## Quick Start (3-Minute Setup)
 
-Building from source requires the [Rust toolchain](https://rustup.rs/) (and a C compiler such as Xcode Command Line Tools on macOS or `cc` on Linux for bundled SQLite).
+Building from source requires the [Rust toolchain](https://rustup.rs/) (and a C compiler such as Xcode Command Line Tools on macOS or `cc` on Linux for bundled SQLite). When running `./setup.sh` interactively without `cargo`, the script offers guided installation via official `rustup`.
 
-### Interactive Install & Autostart
+### 1. Guided Install & Desktop App
 
 ```sh
-./setup.sh        # Builds release binary, runs interactive provider wizard on first setup, installs & starts service
-loom status       # Verifies http://127.0.0.1:4319/health
+./setup.sh        # Checks compiler/Rust, builds release binary, configures autostart, and builds macOS Loom.app
+loom              # Launches the interactive terminal control center (status, keys, diagnostics, web/app launch)
 ```
 
-On first interactive setup, `./setup.sh` launches the provider onboarding wizard: press Enter to select all presets (or choose indices such as `1,4`), paste each API key with hidden input (or press Enter to skip), and Loom fills in endpoints, billing metadata, and default models before syncing `pi`, `opencode2`, and existing Claude Code configurations. Existing provider entries are never overwritten on reinstall or upgrade.
+Once installed, beginners can configure providers and inspect traffic from any of three unified frontends:
+
+- **macOS Desktop App (`~/Applications/Loom.app`)**: Native menu bar `⌘` status icon and standalone `WKWebView` console window—start/stop the daemon, jump to provider setup, or run diagnostics without typing terminal commands.
+- **Web Workspace (`loom console`)**: Guided 3-step onboarding wizard with preset vendor cards, official API key links, pitfall tips, one-click connectivity tests, and automatic client synchronization.
+- **Interactive CLI (`loom`)**: Running `loom` with no arguments opens a menu-driven control center alongside `loom add` (hidden prompt) and `loom doctor --ping`.
+
+Existing provider entries and key files are always preserved when reinstalling or upgrading.
 
 ### Manual Build & Foreground Run
 
@@ -41,11 +47,13 @@ cargo build --release --locked
 ./target/release/loom serve
 ```
 
-### User Service Installer & One-Command Update
+### User Service Installer, Desktop App & One-Command Update
 
 ```sh
 loom install              # Installs binary to ~/.local/bin/{loom,modelhub} and registers user autostart
 loom install --no-start   # Deploys files and service unit without touching a running service
+loom app                  # Builds and opens native macOS ~/Applications/Loom.app (--build-only / --rebuild / --app-dir)
+loom doctor --ping        # Checks permissions, client sync state, and runs safe 1-token upstream connectivity tests
 loom update               # Clones main from github.com/xdlkc/loom, builds --release --locked, verifies keys unchanged, and restarts
 ```
 
@@ -105,18 +113,22 @@ Loom embeds [catalog/zenmux.json](catalog/zenmux.json), [catalog/glm.json](catal
 
 ---
 
-## Local Observability & Management Console
+## Local Observability & Management Workspace
 
 ```sh
 loom console                             # Opens http://loom.localhost:4320/ with a one-use login ticket
+loom console --page providers            # Opens a specific section (onboarding / providers / integrations / overview / requests / sessions / settings)
 loom console --host 127.0.0.1            # Fallback host if browser does not resolve *.localhost
 ```
 
-The management console listens separately on `127.0.0.1:4320` (configurable via `--admin-port` on `loom serve`). `loom console` exchanges `hub.key` over `POST /api/launch` (blocked if `Origin` is present) for a 60-second single-use ticket, which the browser swaps at `POST /api/login` for an 8-hour `HttpOnly; SameSite=Strict` session cookie (`loom_console`).
+The management console listens separately on `127.0.0.1:4320` (configurable via `--admin-port` on `loom serve`). `loom console` (and macOS `Loom.app`) exchanges `hub.key` over `POST /api/launch` (blocked if `Origin` is present) for a 60-second single-use ticket, exchanged for an 8-hour `HttpOnly; SameSite=Strict` session cookie (`loom_console`). Seven integrated views cover the full lifecycle:
 
+- **Onboarding Wizard**: Automatically opens on fresh installs when no active models are configured; guides users through 6 preset vendors and custom HTTPS endpoints with official key links, pitfall tips, and live connectivity tests.
+- **Providers Manager**: Enable/disable providers, rotate API keys without echoing old credentials, toggle bundled public model catalogs, enable/disable or add/remove individual models, and run safe 1-token upstream probes with whitelisted error diagnostics.
+- **Integrations & Network**: Inspect and trigger sync for `pi`, `OpenCode V2`, and `Claude Code`, copy generic OpenAI/Anthropic base URLs (never displaying `hub.key` contents), and configure or disable the persistent loopback outbound HTTP/HTTPS proxy.
 - **Overview**: Filter by time window (`24h` / `7d` / `30d`), provider, model, and harness; view input/output token curves, cache read/write breakdown, token-weighted cache hit rate, average TTFT, P50/P95 latency, and success/error counts. Unknown usage stays unknown (`—`), reasoning tokens are never double-counted into output totals, and vendor wallet balances are never fabricated.
 - **Requests**: Inspect stage timings (`authenticated`, `routed`, `dispatch`, headers, TTFT, completion), sanitized client request payloads, forwarded payloads (credentials excluded), full response/SSE logs, and jump to linked sessions.
-- **Sessions**: Background worker polls every 15 seconds (read-only) to import native transcripts from `~/.pi/agent/sessions`, `~/.claude/projects`, and `~/.local/share/opencode/opencode.db` (supporting both OpenCode V2 `session_v2`/`session_message` and V1 `message`/`part` schemas). Native imports are linked deterministically via session headers (`x-loom-harness`, `x-loom-session-id` from [integrations/pi.ts](integrations/pi.ts) and [integrations/opencode2.ts](integrations/opencode2.ts)) or Claude Code metadata/response IDs—never guessed by prompt similarity and never double-counted into gateway metrics.
+- **Sessions Workspace**: Three-column replay & waterfall workspace backed by a read-only background worker polling every 15 seconds for native transcripts in `~/.pi/agent/sessions`, `~/.claude/projects`, and `~/.local/share/opencode/opencode.db` (supporting both OpenCode V2 `session_v2`/`session_message` and V1 `message`/`part` schemas). Native imports are linked deterministically via session headers (`x-loom-harness`, `x-loom-session-id` from [integrations/pi.ts](integrations/pi.ts) and [integrations/opencode2.ts](integrations/opencode2.ts)) or Claude Code metadata/response IDs—never guessed by prompt similarity and never double-counted into gateway metrics.
 - **Capture Settings**: Independently toggle request/response body capture and native session import, and configure retention (`1–3650` days, default `30` days).
 
 Observations are stored locally in `<data-dir>/observability/traces.sqlite3` (`0600` inside `0700`) with secret/token redaction applied prior to persistence and a `16 MiB` per-response capture cap (`truncated: true` if exceeded). See [docs/observability.md](docs/observability.md) for the specification and metrics rules, and [prototypes/session-workspace/README.md](prototypes/session-workspace/README.md) for the synthetic frontend session-workspace prototype.

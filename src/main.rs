@@ -1,9 +1,11 @@
 mod admin;
 mod bundled;
 mod config;
+mod desktop;
 mod gateway;
 mod harness;
 mod install;
+mod manage;
 mod network;
 mod onboarding;
 mod telemetry;
@@ -17,7 +19,7 @@ struct Cli {
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 #[derive(Subcommand)]
 enum Command {
@@ -45,6 +47,8 @@ enum Command {
         /// Browser hostname; the launch request always uses the loopback IP.
         #[arg(long, default_value = "loom.localhost", value_parser = ["loom.localhost", "localhost", "127.0.0.1"])]
         host: String,
+        #[arg(long, value_parser = ["onboarding", "providers", "integrations", "overview", "requests", "sessions", "settings"])]
+        page: Option<String>,
     },
     /// Choose providers and enter hidden API Keys; names, URLs and models are preset.
     #[command(alias = "configure")]
@@ -62,6 +66,26 @@ enum Command {
     Sync,
     Status,
     Check,
+    /// Diagnose local setup, client sync, and optionally verify provider connectivity.
+    #[command(alias = "test")]
+    Doctor {
+        #[arg(long)]
+        ping: bool,
+        provider: Option<String>,
+        #[arg(long, default_value_t = 4319)]
+        port: u16,
+        #[arg(long, default_value_t = 4320)]
+        admin_port: u16,
+    },
+    /// Build or open the native macOS desktop app (Loom.app).
+    App {
+        #[arg(long)]
+        build_only: bool,
+        #[arg(long)]
+        rebuild: bool,
+        #[arg(long)]
+        app_dir: Option<PathBuf>,
+    },
     /// Show proxy mode; set an HTTP/HTTPS proxy URL, or use 'off' for direct access.
     Proxy {
         url: Option<String>,
@@ -70,17 +94,48 @@ enum Command {
 #[tokio::main]
 async fn main() {
     if run().await.is_err() {
-        eprintln!("操作失败：请检查本机配置、网络或文件权限。未输出凭据。");
+        eprintln!(
+            "操作失败：请检查本机配置、网络或文件权限（可运行 loom doctor 排查）。未输出凭据。"
+        );
         std::process::exit(1);
     }
 }
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     let d = cli.data_dir.unwrap_or_else(config::data_dir);
-    match cli.command {
+    let Some(command) = cli.command else {
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            return onboarding::interactive_menu(&d).await;
+        }
+        return onboarding::print_summary(&d).await;
+    };
+    match command {
         Command::Proxy { url } => network::proxy(&d, url.as_deref())?,
         Command::Update => update::update(&d)?,
-        Command::Console { port, host } => admin::open_console(&d, port, &host).await?,
+        Command::Console { port, host, page } => {
+            admin::open_console(&d, port, &host, page.as_deref()).await?
+        }
+        Command::Doctor {
+            ping,
+            provider,
+            port,
+            admin_port,
+        } => {
+            manage::run_doctor(
+                &d,
+                &config::home(),
+                port,
+                admin_port,
+                ping,
+                provider.as_deref(),
+            )
+            .await?
+        }
+        Command::App {
+            build_only,
+            rebuild,
+            app_dir,
+        } => desktop::launch_app(&d, app_dir.as_deref(), build_only, rebuild)?,
         Command::Install { no_start } => {
             if !no_start
                 && std::io::stdin().is_terminal()
@@ -93,7 +148,9 @@ async fn run() -> Result<()> {
         }
         Command::Init => {
             config::init(&d)?;
-            println!("已初始化。运行 loom add，选择供应商并隐藏输入 Key 即可。");
+            println!(
+                "已初始化。运行 loom add（或打开 Loom.app / loom console），选择供应商并输入 Key 即可。"
+            );
         }
         Command::Add { providers, custom } => onboarding::configure(&d, &providers, custom)?,
         Command::SetKey { provider } => {
@@ -158,7 +215,7 @@ async fn run() -> Result<()> {
             .await?;
             let admin_port = admin_bind.local_addr()?.port();
             println!("本机管控台：http://127.0.0.1:{admin_port}/；运行 loom console 安全登录。");
-            let admin_app = admin::App::new(d.clone(), telemetry.clone(), admin_port);
+            let admin_app = admin::App::new(d.clone(), telemetry.clone(), admin_port, port);
             tokio::spawn(async move {
                 let _ = axum::serve(admin_bind, admin::router(admin_app)).await;
             });

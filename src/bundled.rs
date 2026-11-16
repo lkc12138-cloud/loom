@@ -8,26 +8,35 @@ const CATALOGS: [&str; 3] = [
     include_str!("../catalog/kimi.json"),
 ];
 
-pub fn supplement(provider: &Value, models: &mut Vec<Value>) -> Result<()> {
-    if provider["includeBundledModels"] == false {
-        return Ok(());
-    }
-    let provider_base = provider["baseURL"]
-        .as_str()
-        .map(|s| s.trim_end_matches('/'));
+pub fn models_for_base(base: &str) -> Result<Vec<Value>> {
+    let normalized = base.trim_end_matches('/');
+    let mut out = vec![];
     for raw in CATALOGS {
         let catalog: Value = serde_json::from_str(raw)?;
-        if provider_base != catalog["baseURL"].as_str() {
+        if Some(normalized) != catalog["baseURL"].as_str() {
             continue;
         }
         for m in catalog["models"]
             .as_array()
             .ok_or("bundled models required")?
         {
-            // Even a disabled local entry takes precedence over the public catalog.
-            if !models.iter().any(|local| local["id"] == m["id"]) {
-                models.push(m.clone());
-            }
+            out.push(m.clone());
+        }
+    }
+    Ok(out)
+}
+
+pub fn supplement(provider: &Value, models: &mut Vec<Value>) -> Result<()> {
+    if provider["includeBundledModels"] == false {
+        return Ok(());
+    }
+    let Some(provider_base) = provider["baseURL"].as_str() else {
+        return Ok(());
+    };
+    for m in models_for_base(provider_base)? {
+        // Even a disabled local entry takes precedence over the public catalog.
+        if !models.iter().any(|local| local["id"] == m["id"]) {
+            models.push(m);
         }
     }
     Ok(())

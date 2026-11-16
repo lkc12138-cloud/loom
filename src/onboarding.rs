@@ -1,100 +1,16 @@
-//! Local, hidden-input onboarding. Presets contain public routing metadata only.
+//! Local, hidden-input onboarding and interactive terminal control center.
 use crate::{
+    admin,
     config::{self, Result},
-    validate_key,
+    desktop, install,
+    manage::{self, PRESETS, PresetInfo, models_json, preset_provider},
+    network, validate_key,
 };
 use serde_json::{Value, json};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
 };
-
-struct Preset {
-    id: &'static str,
-    name: &'static str,
-    base: &'static str,
-    billing: &'static str,
-    key_hint: &'static str,
-    models: &'static [(&'static str, &'static str)],
-}
-// Public API documentation and model IDs; never replace an existing provider with these.
-// See README's preset sources. Limits are conservative defaults, not account entitlements.
-const PRESETS: &[Preset] = &[
-    Preset {
-        id: "zenmux",
-        name: "ZenMux",
-        base: "https://zenmux.ai/api/v1",
-        billing: "ZenMux 推理 Key 对应套餐",
-        key_hint: "推理 API Key（不是 Management Key）",
-        models: &[
-            ("anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5"),
-            ("anthropic/claude-opus-5.5", "Claude Opus 5.5"),
-            ("anthropic/claude-haiku-5.5", "Claude Haiku 5.5"),
-        ],
-    },
-    Preset {
-        id: "glm",
-        name: "GLM · 国内 Coding Plan",
-        base: "https://open.bigmodel.cn/api/coding/paas/v4",
-        billing: "国内 Coding Plan",
-        key_hint: "Coding Plan 套餐 API Key",
-        models: &[
-            ("glm-5.3", "GLM 5.3"),
-            ("glm-5.3-flash", "GLM 5.3 Flash"),
-            ("glm-5.3-flashx", "GLM 5.3 FlashX"),
-            ("glm-5.2", "GLM 5.2"),
-            ("glm-5.1", "GLM 5.1"),
-            ("glm-5-turbo", "GLM 5 Turbo"),
-            ("glm-5", "GLM 5"),
-            ("glm-4.7", "GLM 4.7"),
-            ("glm-4.6", "GLM 4.6"),
-            ("glm-4.5", "GLM 4.5"),
-            ("glm-4.5-air", "GLM 4.5 Air"),
-        ],
-    },
-    Preset {
-        id: "minimax",
-        name: "MiniMax · 国内订阅",
-        base: "https://api.minimax.cn/v1",
-        billing: "国内 Coding / Token / M Plan",
-        key_hint: "订阅 Key（不是普通 API Key）",
-        models: &[("MiniMax-M3.1-Flash", "MiniMax M3.1 Flash")],
-    },
-    Preset {
-        id: "deepseek",
-        name: "DeepSeek · API 钱包",
-        base: "https://api.deepseek.com",
-        billing: "API 钱包",
-        key_hint: "开放平台 API Key",
-        models: &[
-            ("deepseek-flash", "DeepSeek Flash"),
-            ("deepseek-v4-pro", "DeepSeek V4 Pro"),
-        ],
-    },
-    Preset {
-        id: "kimi",
-        name: "Kimi Code · 国内订阅",
-        base: "https://api.kimi.com/coding/v1",
-        billing: "Kimi Code 订阅",
-        key_hint: "Kimi Code API Key（不是 Moonshot 开放平台 Key）",
-        models: &[
-            ("k3.1-pro", "K3.1 Pro"),
-            ("k3.1-pro-highspeed", "K3.1 Pro Highspeed"),
-            ("k3", "K3"),
-            ("k3-256k", "K3 256K"),
-            ("kimi-for-coding", "K2.8 Preview"),
-            ("kimi-for-coding-highspeed", "K2.7 Code Highspeed"),
-        ],
-    },
-    Preset {
-        id: "longcat",
-        name: "LongCat · 美团",
-        base: "https://api.longcat.chat/openai/v1",
-        billing: "LongCat API 钱包 / Token 资源包",
-        key_hint: "LongCat 开放平台 API Key（不是网页登录令牌）",
-        models: &[("LongCat-2.5", "LongCat 2.5")],
-    },
-];
 
 trait Input {
     fn line(&mut self, prompt: &str) -> Result<String>;
@@ -142,25 +58,6 @@ fn selection(s: &str) -> Result<Vec<usize>> {
     }
     Ok(chosen)
 }
-fn models(ids: &[(&str, &str)], reasoning: bool) -> Value {
-    json!(
-        ids.iter()
-            .map(|(id, name)| json!({
-                "id":id, "name":name, "contextWindow":128000, "maxTokens":8192,
-                "input":["text"], "reasoning":reasoning
-            }))
-            .collect::<Vec<_>>()
-    )
-}
-fn preset_provider(p: &Preset, key: &Path) -> Value {
-    let mut value = json!({"prefix":p.id,"name":p.name,"baseURL":p.base,"billing":p.billing,
-        "enabled":true,"keyFile":key,"models":models(p.models, true)});
-    if p.id == "longcat" {
-        // LongCat uses the same enabled/disabled thinking object, not DeepSeek's effort levels.
-        value["piCompat"] = json!({"thinkingFormat":"deepseek","supportsReasoningEffort":false});
-    }
-    value
-}
 pub fn needs_setup(d: &Path) -> Result<bool> {
     if !d.join("providers.json").exists() {
         return Ok(true);
@@ -205,9 +102,26 @@ fn wizard(
         let selected = match selected {
             Some(s) => s,
             None => {
-                io.say("选择供应商（默认全部）。只需填 Key，名称、地址和模型自动配置。");
+                io.say("\n选择要配置的模型厂商（默认全选，无 Key 的厂商直接回车跳过即可）：");
+                let configured_map = original["providers"].as_object();
                 for (i, p) in PRESETS.iter().enumerate() {
-                    io.say(&format!("  [✓] {}. {}", i + 1, p.name));
+                    let is_configured = configured_map.is_some_and(|m| {
+                        m.iter()
+                            .any(|(pid, v)| config::provider_prefix(pid, v) == p.id)
+                    });
+                    let badge = if is_configured {
+                        "已配置"
+                    } else {
+                        "未配置"
+                    };
+                    io.say(&format!(
+                        "  [{}] {}. {}（{} · {}）",
+                        badge,
+                        i + 1,
+                        p.name,
+                        p.region_hint,
+                        p.key_url
+                    ));
                 }
                 loop {
                     let answer = io.line("回车全部 / 编号多选如 1,4 / 0 退出")?;
@@ -226,12 +140,12 @@ fn wizard(
         }
     }
     if config::catalog(&config::read(&d.join("providers.json"))?)?.is_empty() {
-        io.say("未添加供应商。之后运行 loom add 即可继续。");
+        io.say("未添加供应商。之后运行 loom add、loom 或在桌面/网页端随时可继续配置。");
     } else {
         config::sync(&d, h).inspect_err(|_| {
             io.say("Key 已保存在本机；客户端同步未完成，处理客户端配置后运行 loom sync。")
         })?;
-        io.say("已保存并同步客户端。配置即时生效，运行中的 agent 请刷新模型列表。");
+        io.say("已保存并同步客户端。配置即时生效，可运行 loom doctor --ping 验证连通性。");
     }
     Ok(())
 }
@@ -247,7 +161,7 @@ fn read_key(io: &mut dyn Input, prompt: &str) -> Result<String> {
         io.say("Key 格式无效，请重新粘贴；回车跳过。未保存此次输入。");
     }
 }
-fn configure_preset(d: &Path, p: &Preset, io: &mut dyn Input) -> Result<()> {
+fn configure_preset(d: &Path, p: &PresetInfo, io: &mut dyn Input) -> Result<()> {
     let registry = d.join("providers.json");
     let before = std::fs::read(&registry)?;
     let mut r: Value = serde_json::from_slice(&before)?;
@@ -282,7 +196,10 @@ fn configure_preset(d: &Path, p: &Preset, io: &mut dyn Input) -> Result<()> {
     } else {
         "回车跳过"
     };
-    io.say(&format!("\n{} · {}", p.name, p.key_hint));
+    io.say(&format!(
+        "\n{} · {}\n  获取地址：{}\n  提示：{}",
+        p.name, p.key_hint, p.key_url, p.pitfall_hint
+    ));
     let key = read_key(io, &format!("API Key（隐藏输入；{action}）"))?;
     if key.is_empty() {
         return Ok(());
@@ -342,7 +259,7 @@ fn custom_provider(d: &Path, io: &mut dyn Input) -> Result<()> {
         return Err("provider exists; use loom set-key".into());
     }
     let mut v = json!({"prefix":prefix,"name":name,"baseURL":base,"billing":billing,
-        "keyFile":key_path,"enabled":true,"models":models(&ids, false)});
+        "keyFile":key_path,"enabled":true,"models":models_json(&ids, false)});
     if !native.is_empty() {
         v["anthropicBaseURL"] = json!(native);
     }
@@ -360,6 +277,160 @@ fn custom_provider(d: &Path, io: &mut dyn Input) -> Result<()> {
     if let Err(e) = config::save(&registry, &r) {
         let _ = std::fs::remove_file(&key_path);
         return Err(e);
+    }
+    Ok(())
+}
+
+pub async fn print_summary(d: &Path) -> Result<()> {
+    let home = config::home();
+    let snap = manage::setup_snapshot(d, &home, 4319, None).await?;
+    let gw_ok = snap["gateway"]["healthy"] == true;
+    let ready = snap["ready_model_count"].as_u64().unwrap_or(0);
+    let providers_len = snap["providers"].as_array().map_or(0, Vec::len);
+    println!("Loom 本机统一模型网关");
+    println!(
+        "  网关服务: {}",
+        if gw_ok {
+            "● 运行中 (http://127.0.0.1:4319/v1)"
+        } else {
+            "○ 未运行（运行 loom install 或 loom serve 启动）"
+        }
+    );
+    println!("  模型配置: {providers_len} 个厂商 · {ready} 个可用模型");
+    println!(
+        "  出站网络: {}",
+        if snap["proxy"]["configured"] == true {
+            "已配置持久代理"
+        } else {
+            "直连"
+        }
+    );
+    println!("\n常用命令：");
+    println!("  loom add            选择预设厂商并粘贴 API Key");
+    println!("  loom doctor --ping  全面检查配置并实测上游连通性");
+    println!("  loom console        打开本机可视化工作台（浏览器）");
+    if cfg!(target_os = "macos") {
+        println!("  loom app            启动/安装 macOS 原生应用 Loom.app");
+    }
+    println!("  loom install        安装并启动开机自启后台服务");
+    println!("  loom sync           同步 pi / OpenCode / Claude Code 配置");
+    Ok(())
+}
+
+pub async fn interactive_menu(d: &Path) -> Result<()> {
+    let home = config::home();
+    loop {
+        let snap = manage::setup_snapshot(d, &home, 4319, None).await?;
+        let gw_ok = snap["gateway"]["healthy"] == true;
+        let ready = snap["ready_model_count"].as_u64().unwrap_or(0);
+        let providers = snap["providers"].as_array().cloned().unwrap_or_default();
+        let proxy_on = snap["proxy"]["configured"] == true;
+        let pi_ok = snap["clients"]["pi"]["synced"] == true;
+        let oc_ok = snap["clients"]["opencode2"]["synced"] == true;
+        let cc_ok = snap["clients"]["claude_code"]["synced"] == true;
+
+        println!("\n╭──────────────────────────────────────────────╮");
+        println!("│  ⌘ Loom 本机模型网关 · 新手控制中心           │");
+        println!("╰──────────────────────────────────────────────╯");
+        println!(
+            "  后台网关: {}   可用模型: {} 个",
+            if gw_ok {
+                "● 运行中 (127.0.0.1:4319)"
+            } else {
+                "○ 未运行"
+            },
+            ready
+        );
+        println!(
+            "  出站网络: {}   客户端同步: pi {} · OpenCode {} · Claude {}",
+            if proxy_on {
+                "已配置持久代理"
+            } else {
+                "直连"
+            },
+            if pi_ok { "✓" } else { "-" },
+            if oc_ok { "✓" } else { "-" },
+            if cc_ok { "✓" } else { "-" }
+        );
+        if providers.is_empty() {
+            println!(
+                "  提示: 尚未添加任何模型厂商，建议先选 [1] 添加 API Key 或选 [4] 在网页向导中完成配置。"
+            );
+        } else {
+            let names: Vec<String> = providers
+                .iter()
+                .map(|p| {
+                    let n = p["name"].as_str().unwrap_or("?");
+                    let mark = if p["enabled"] == true && p["has_key"] == true {
+                        "✓"
+                    } else {
+                        "!"
+                    };
+                    format!("{n}[{mark}]")
+                })
+                .collect();
+            println!("  已配置厂商: {}", names.join(" · "));
+        }
+
+        println!("\n请选择操作：");
+        println!(
+            "  1. 配置 / 更新预设模型厂商 Key（ZenMux / GLM / MiniMax / DeepSeek / Kimi / LongCat）"
+        );
+        println!("  2. 添加自定义 HTTPS 兼容厂商");
+        println!("  3. 运行环境诊断与真实连通性测试 (doctor --ping)");
+        println!("  4. 打开 Web 可视化工作台 (console)");
+        if cfg!(target_os = "macos") {
+            println!("  5. 启动 / 安装 macOS 原生应用 Loom.app");
+        } else {
+            println!("  5. 查看桌面端支持说明");
+        }
+        println!("  6. 设置或关闭本机出站代理 (proxy)");
+        println!("  7. 安装 / 重启后台自启动网关服务 (install)");
+        println!("  8. 同步本地 AI 编程客户端 (sync)");
+        println!("  0. 退出\n");
+
+        let choice = config::prompt("输入选项编号 [0-8]")?;
+        let res: Result<()> = match choice.trim() {
+            "" | "0" | "q" | "exit" => {
+                println!("已退出。后台网关如已启动将继续在 127.0.0.1:4319 运行。");
+                break;
+            }
+            "1" => wizard(d, &home, None, false, &mut Terminal),
+            "2" => wizard(d, &home, None, true, &mut Terminal),
+            "3" => manage::run_doctor(d, &home, 4319, 4320, true, None).await,
+            "4" => {
+                if !gw_ok {
+                    println!("提示：后台服务尚未运行，建议先选 [7] 安装并启动后台服务。");
+                    Ok(())
+                } else {
+                    admin::open_console(d, 4320, "loom.localhost", None).await
+                }
+            }
+            "5" => desktop::launch_app(d, None, false, false),
+            "6" => {
+                let raw = config::prompt(
+                    "输入 HTTP/HTTPS 代理地址（如 http://127.0.0.1:7890；输入 off 恢复直连；直接回车取消）",
+                )?;
+                if raw.trim().is_empty() {
+                    Ok(())
+                } else {
+                    network::proxy(d, Some(raw.trim()))
+                }
+            }
+            "7" => install::install(d.to_path_buf(), false).await,
+            "8" => {
+                config::sync(d, &home)?;
+                println!("已同步 pi / OpenCode 和已有 Claude Code 配置。");
+                Ok(())
+            }
+            _ => {
+                println!("无效选项，请输入 0–8 的数字。");
+                Ok(())
+            }
+        };
+        if let Err(e) = res {
+            eprintln!("提示：{e}");
+        }
     }
     Ok(())
 }

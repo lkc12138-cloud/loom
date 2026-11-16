@@ -44,11 +44,7 @@ fn err_message(native: bool, status: u16, code: &str, message: &str) -> Response
 }
 // Never reflect upstream prose, arbitrary error types, or credential-bearing URLs.
 // Only known machine-readable billing categories select a fixed explanation.
-fn upstream_error(native: bool, status: u16, body: &Value) -> Response {
-    let code = format!("UPSTREAM_{status}");
-    if status != 402 {
-        return err(native, status, &code);
-    }
+pub fn classify_402(body: &Value) -> (&'static str, &'static str) {
     let categories: Vec<&str> = ["/error/type", "/error/code", "/type", "/code"]
         .iter()
         .filter_map(|p| body.pointer(p).and_then(Value::as_str))
@@ -60,13 +56,29 @@ fn upstream_error(native: bool, status: u16, body: &Value) -> Response {
         "insufficient_balance",
         "insufficient_balance_error",
     ];
-    let message = if categories.iter().any(|v| quota.contains(v)) {
-        "UPSTREAM_402 [subscription_quota_exhausted]: 上游套餐额度已用尽，请在对应账号查看窗口重置时间。钱包有余额不代表套餐仍有额度。"
+    if categories.iter().any(|v| quota.contains(v)) {
+        (
+            "subscription_quota_exhausted",
+            "UPSTREAM_402 [subscription_quota_exhausted]: 上游套餐额度已用尽，请在对应账号查看窗口重置时间。钱包有余额不代表套餐仍有额度。",
+        )
     } else if categories.iter().any(|v| balance.contains(v)) {
-        "UPSTREAM_402 [insufficient_credit]: 当前 Key 对应计费账户余额不足或欠费。请核对 Key 的计费范围，钱包余额与订阅额度分别计算。"
+        (
+            "insufficient_credit",
+            "UPSTREAM_402 [insufficient_credit]: 当前 Key 对应计费账户余额不足或欠费。请核对 Key 的计费范围，钱包余额与订阅额度分别计算。",
+        )
     } else {
-        "UPSTREAM_402 [payment_required]: 上游返回计费或额度错误，具体原因尚未确认。请在 loom console 的请求详情核对上游错误、账号和 Key 所属通道。"
-    };
+        (
+            "payment_required",
+            "UPSTREAM_402 [payment_required]: 上游返回计费或额度错误，具体原因尚未确认。请在 loom console 的请求详情核对上游错误、账号和 Key 所属通道。",
+        )
+    }
+}
+fn upstream_error(native: bool, status: u16, body: &Value) -> Response {
+    let code = format!("UPSTREAM_{status}");
+    if status != 402 {
+        return err(native, status, &code);
+    }
+    let (_, message) = classify_402(body);
     err_message(native, status, &code, message)
 }
 fn recorded_error(trace: &mut Option<Flight>, native: bool, status: u16, code: &str) -> Response {

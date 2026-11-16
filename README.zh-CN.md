@@ -19,18 +19,24 @@ Loom 的职责严格限定在**模型统一路由、本机客户端同步与回�
 
 ---
 
-## 快速开始
+## 快速开始（3 分钟上手）
 
-从源码构建需要 [Rust 工具链](https://rustup.rs/)（因启用 `rusqlite` bundled 构建，还需 C 编译器：macOS 安装 Xcode Command Line Tools，Linux 安装 `cc`）。
+从源码构建需要 [Rust 工具链](https://rustup.rs/)（因启用 `rusqlite` bundled 构建，还需 C 编译器：macOS 安装 Xcode Command Line Tools，Linux 安装 `cc`）。交互运行 `./setup.sh` 时若缺少 Rust 工具链，脚本会自动引导通过官方 `rustup` 安装。
 
-### 交互式安装与自启动
+### 1. 一键安装与桌面端部署
 
 ```sh
-./setup.sh        # 编译 release 二进制；首次交互运行进入供应商向导，随后安装并启用自启动
-loom status       # 检查 http://127.0.0.1:4319/health 运行状态
+./setup.sh        # 检查编译环境、编译 release 二进制、引导初始配置、启用自启动并构建 macOS Loom.app
+loom              # 在终端打开交互式新手控制中心（查看状态、配置 Key、自检与打开工作台）
 ```
 
-首次交互安装时，`./setup.sh` 会启动供应商配置向导：直接回车可全选预设（或输入 `1,4` 等编号多选），逐项以隐藏输入粘贴 Key（无 Key 可回车跳过），Loom 会自动写入地址、计费来源与默认模型，并同步 `pi`、`opencode2` 及已有 Claude Code 配置。再次安装或更新时若已有供应商配置，不会重复询问或覆盖原配置。
+安装完成后，小白用户可任选以下三种前端之一完成全流程配置：
+
+- **macOS 桌面端（`~/Applications/Loom.app`）**：双击打开即可使用，菜单栏常驻 `⌘` 图标支持一键启停后台网关、直达工作台、运行连通性自检，免终端命令自动安全登录。
+- **Web 可视化工作台（`loom console`）**：内置「新手 3 步向导」，平铺各大模型厂商卡片、官网 Key 获取入口与防踩坑提示，粘贴 API Key 后一键验证连通性并自动同步客户端。
+- **终端交互菜单（`loom`）**：无参数运行直接进入控制中心，或通过 `loom add`（隐藏输入）与 `loom doctor --ping` 完成配置与实测。
+
+首次交互安装时，若直接回车跳过终端输入，也可随后打开 `Loom.app` 或 `loom console` 在可视化界面完成所有厂商配置。再次安装或更新时，既有配置与密钥原封保留。
 
 ### 手动编译与前台运行
 
@@ -41,11 +47,13 @@ cargo build --release --locked
 ./target/release/loom serve
 ```
 
-### 用户级安装器与一条命令更新
+### 用户级安装器、桌面端与一条命令更新
 
 ```sh
 loom install              # 安装二进制至 ~/.local/bin/{loom,modelhub} 并注册用户自启动服务
 loom install --no-start   # 仅部署二进制与服务配置，不启停正在运行的服务
+loom app                  # 编译并打开 macOS 原生应用 ~/Applications/Loom.app（支持 --build-only / --rebuild / --app-dir）
+loom doctor --ping        # 一键检查本机权限、客户端同步状态并实测各厂商单 Token 连通性
 loom update               # 从 github.com/xdlkc/loom 拉取 main，执行 --release --locked 编译，校验配置/Key 不变后自动重启
 ```
 
@@ -104,19 +112,23 @@ Loom 在编译期嵌入 [catalog/zenmux.json](catalog/zenmux.json)、[catalog/gl
 
 ---
 
-## 本机可观测与会话管控台
+## 本机可观测与全功能工作台
 
 ```sh
 loom console                             # 以一次性登录票据安全打开 http://loom.localhost:4320/
+loom console --page providers            # 直接打开指定分区（onboarding / providers / integrations / overview / requests / sessions / settings）
 loom console --host 127.0.0.1            # 若浏览器不支持 *.localhost 可切换至回环 IP
 ```
 
-管控台独立监听 `127.0.0.1:4320`（可通过 `loom serve --admin-port <端口>` 指定）。`loom console` 使用 `hub.key` 调用 `POST /api/launch`（携带 `Origin` 头会被拒绝）换取 60 秒一次性票据，浏览器在 `POST /api/login` 将其兑换为 8 小时 `HttpOnly; SameSite=Strict` 会话 Cookie（`loom_console`）。
+管控台独立监听 `127.0.0.1:4320`（可通过 `loom serve --admin-port <端口>` 指定）。`loom console`（及 macOS `Loom.app`）使用 `hub.key` 调用 `POST /api/launch`（携带 `Origin` 头会被拒绝）换取 60 秒一次性票据，兑换为 8 小时 `HttpOnly; SameSite=Strict` 会话 Cookie（`loom_console`）。网页工作台内含七个视图：
 
-- **概览**：支持按时间窗口（`24h` / `7d` / `30d`）、供应商、模型与 harness 筛选；展示输入/输出 Token 曲线、缓存读写分解、Token 加权缓存命中率、平均首 Token 延迟（TTFT）、请求耗时 P50 / P95 与成功/异常数。缺失 usage 保持未知（`—`），reasoning 细分不二次叠加到输出中，不将厂商余额/订阅积分混入 Token 统计。
-- **请求**：展示分阶段耗时（`authenticated`、`routed`、`dispatch`、响应头、首 Token、完成）、脱敏后的客户端请求、转发参数（已剥离凭据）、完整响应 / SSE 事件及关联会话跳转。
-- **会话轨迹**：后台每 15 秒只读增量导入 `~/.pi/agent/sessions`、`~/.claude/projects` 与 `~/.local/share/opencode/opencode.db`（同时兼容 OpenCode V2 `session_v2`/`session_message` 与 V1 `message`/`part` 表结构）。基于 [integrations/pi.ts](integrations/pi.ts) 与 [integrations/opencode2.ts](integrations/opencode2.ts) 注入的 `x-loom-harness` / `x-loom-session-id` 请求头或 Claude Code 原生 metadata / `response_id` 精确关联，绝不按提示词相似度猜测归属，也不把历史导入重算进网关计量。
-- **采集设置**：独立开关请求/响应正文采集与原生会话导入，配置保留期限（`1–3650` 天，默认 `30` 天）。
+- **新手向导（Onboarding）**：首次无可用模型时自动打开，提供 6 大预设厂商与自定义 HTTPS 厂商的分步引导、Key 申请外链、避坑说明与一键保存测通。
+- **模型厂商（Providers）**：集中启停供应商、无回显轮换 Key、开关公共目录补充、启用/停用或增删单个模型，并支持指定模型执行单 Token 连通性探测与白名单错误诊断。
+- **客户端接入与网络（Integrations）**：查看并一键同步 `pi`、`OpenCode V2`、`Claude Code`，复制通用 OpenAI/Anthropic 入口地址（绝不暴露 `hub.key` 明文），以及设置或关闭本机持久 HTTP/HTTPS 出站代理。
+- **概览（Overview）**：支持按时间窗口（`24h` / `7d` / `30d`）、供应商、模型与 harness 筛选；展示输入/输出 Token 曲线、缓存读写分解、Token 加权缓存命中率、平均首 Token 延迟（TTFT）、请求耗时 P50 / P95 与成功/异常数。缺失 usage 保持未知（`—`），reasoning 细分不二次叠加到输出中，不将厂商余额/订阅积分混入 Token 统计。
+- **请求（Requests）**：展示分阶段耗时（`authenticated`、`routed`、`dispatch`、响应头、首 Token、完成）、脱敏后的客户端请求、转发参数（已剥离凭据）、完整响应 / SSE 事件及关联会话跳转。
+- **会话轨迹（Sessions）**：三栏式会话工作台，后台每 15 秒只读增量导入 `~/.pi/agent/sessions`、`~/.claude/projects` 与 `~/.local/share/opencode/opencode.db`（同时兼容 OpenCode V2 `session_v2`/`session_message` 与 V1 `message`/`part` 表结构）。支持对话回放、时间轴瀑布视图与右侧常驻步骤检查器。基于 [integrations/pi.ts](integrations/pi.ts) 与 [integrations/opencode2.ts](integrations/opencode2.ts) 注入的 `x-loom-harness` / `x-loom-session-id` 请求头或 Claude Code 原生 metadata / `response_id` 精确关联，绝不按提示词相似度猜测归属，也不把历史导入重算进网关计量。
+- **采集设置（Settings）**：独立开关请求/响应正文采集与原生会话导入，配置保留期限（`1–3650` 天，默认 `30` 天）。
 
 观测数据落盘在 `<data-dir>/observability/traces.sqlite3`（`0700` 目录下的 `0600` 文件），入库前脱敏已知密钥与常见 token 模式，单条响应采集上限为 `16 MiB`（超出后标记截断但不影响原始推理透传）。完整规范见 [docs/observability.md](docs/observability.md)；独立前端会话工作台原型见 [prototypes/session-workspace/README.md](prototypes/session-workspace/README.md)。
 

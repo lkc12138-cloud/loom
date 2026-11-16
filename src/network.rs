@@ -64,22 +64,36 @@ pub fn failure(e: &reqwest::Error) -> (&'static str, &'static str) {
     }
 }
 
-pub fn proxy(data: &Path, value: Option<&str>) -> Result<()> {
+pub fn set_proxy(data: &Path, value: &str) -> Result<bool> {
     let path = data.join("providers.json");
     let mut registry = config::read(&path)?;
-    if let Some(value) = value {
-        let value = if value == "off" { "" } else { value };
-        if !value.is_empty() && !valid_proxy(value) {
+    let value = if value.trim() == "off" {
+        ""
+    } else {
+        value.trim()
+    };
+    if !value.is_empty() && !valid_proxy(value) {
+        return Err("invalid proxy".into());
+    }
+    config::catalog(&registry)?;
+    registry["proxy"] = value.into();
+    config::backup(&path, data)?;
+    config::save(&path, &registry)?;
+    Ok(!value.is_empty())
+}
+
+pub fn proxy(data: &Path, value: Option<&str>) -> Result<()> {
+    if let Some(value) = value
+        && let Err(e) = set_proxy(data, value)
+    {
+        if e.to_string() == "invalid proxy" {
             eprintln!(
                 "代理地址须为 HTTP/HTTPS URL，不含用户名、密码、查询参数或自定义路径。未修改配置。"
             );
-            return Err("invalid proxy".into());
         }
-        config::catalog(&registry)?;
-        registry["proxy"] = value.into();
-        config::backup(&path, data)?;
-        config::save(&path, &registry)?;
+        return Err(e);
     }
+    let registry = config::read(&data.join("providers.json"))?;
     if registry["proxy"].as_str().is_some_and(|v| !v.is_empty()) {
         println!("Loom 已配置持久代理；无需重启，下一次请求生效。未显示代理地址或凭据。");
     } else {

@@ -1,7 +1,7 @@
 //! Loopback-only console, separate from inference. Browser credentials are short lived.
 use crate::{
     config::{self, Result},
-    harness,
+    harness, manage, network,
     telemetry::{Filter, Store, hash},
 };
 use axum::{
@@ -28,16 +28,29 @@ struct Auth {
 #[derive(Clone)]
 pub struct App {
     pub data: PathBuf,
+    pub home: PathBuf,
     pub store: Store,
     pub port: u16,
+    pub gateway_port: u16,
     auth: Arc<Mutex<Auth>>,
 }
 impl App {
-    pub fn new(data: PathBuf, store: Store, port: u16) -> Self {
+    pub fn new(data: PathBuf, store: Store, port: u16, gateway_port: u16) -> Self {
+        Self::new_with_home(data, config::home(), store, port, gateway_port)
+    }
+    pub fn new_with_home(
+        data: PathBuf,
+        home: PathBuf,
+        store: Store,
+        port: u16,
+        gateway_port: u16,
+    ) -> Self {
         Self {
             data,
+            home,
             store,
             port,
+            gateway_port,
             auth: Arc::new(Mutex::new(Auth::default())),
         }
     }
@@ -51,9 +64,33 @@ fn text(h: &HeaderMap, name: &str) -> Option<String> {
 fn error(status: u16, code: &str) -> Response {
     (
         StatusCode::from_u16(status).unwrap(),
-        Json(json!({"error":code})),
+        Json(json!({"error": code})),
     )
         .into_response()
+}
+fn error_msg(status: u16, code: &str, message: &str) -> Response {
+    (
+        StatusCode::from_u16(status).unwrap(),
+        Json(json!({"error": code, "message": message})),
+    )
+        .into_response()
+}
+fn safe_message(e: &(dyn std::error::Error + Send + Sync)) -> String {
+    let s = e.to_string();
+    if s.contains("opencode.jsonc contains comments") {
+        return "OpenCode 配置文件 opencode.jsonc 含有注释，Loom 已保护性跳过覆盖；请先移除注释或改用 opencode.json。".into();
+    }
+    if s.contains("both exist") {
+        return "检测到 opencode.json 与 opencode.jsonc 同时存在，Loom 已拒绝覆盖；请保留其中一份后重试。".into();
+    }
+    if s.contains("add a provider first") {
+        return "请先添加并启用至少一个模型厂商，再同步客户端。".into();
+    }
+    // Only surface authored non-ASCII validation guidance; hide raw OS/filesystem errors.
+    if !s.is_ascii() && !s.contains('/') && !s.contains('\\') {
+        return s;
+    }
+    "操作失败，请检查配置参数或本机文件权限。".into()
 }
 fn token() -> String {
     format!(
@@ -177,6 +214,8 @@ async fn handle(State(app): State<App>, req: Request) -> Response {
         }
         let store = app.store.clone();
         let data = app.data.clone();
+        let home = app.home.clone();
+        let gateway_port = app.gateway_port;
         if path == "/api/settings" && method == "POST" {
             let bytes = match to_bytes(req.into_body(), 2048).await {
                 Ok(v) => v,
@@ -201,6 +240,105 @@ async fn handle(State(app): State<App>, req: Request) -> Response {
                 }
             }
             Json(json!({"ok":true})).into_response()
+        } else if path == "/api/setup" && method == "GET" {
+            match manage::setup_snapshot(&data, &home, gateway_port, None).await {
+                Ok(v) => Json(v).into_response(),
+                Err(e) => error_msg(500, "SETUP_READ_FAILED", &safe_message(&*e)),
+            }
+        } else if path == "/api/providers/test" && method == "POST" {
+            let Ok(bytes) = to_bytes(req.into_body(), 65536).await else {
+                return error_msg(400, "INVALID_REQUEST", "请求体格式无效或过大。");
+            };
+            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+                return error_msg(400, "INVALID_JSON", "请提交有效的 JSON 参数。");
+            };
+            let Some(pid) = v["provider_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return error_msg(400, "PROVIDER_REQUIRED", "请指定要检测的供应商 ID。");
+            };
+            let model = v["model_id"].as_str().map(String::from);
+            match manage::verify_provider(
+                &data,
+                pid,
+                model.as_deref(),
+                #[cfg(test)]
+                None,
+            )
+            .await
+            {
+                Ok(res) => Json(res).into_response(),
+                Err(e) => error_msg(400, "VERIFY_FAILED", &safe_message(&*e)),
+            }
+        } else if method == "POST"
+            && [
+                "/api/providers/preset",
+                "/api/providers/custom",
+                "/api/providers/update",
+                "/api/providers/delete",
+                "/api/proxy",
+                "/api/sync",
+            ]
+            .contains(&path.as_str())
+        {
+            let Ok(bytes) = to_bytes(req.into_body(), 65536).await else {
+                return error_msg(400, "INVALID_REQUEST", "请求体格式无效或过大。");
+            };
+            let v: Value = if bytes.is_empty() {
+                json!({})
+            } else if let Ok(parsed) = serde_json::from_slice(&bytes) {
+                parsed
+            } else {
+                return error_msg(400, "INVALID_JSON", "请提交有效的 JSON 参数。");
+            };
+            let route = path.clone();
+            let op = tokio::task::spawn_blocking(move || -> Result<Value> {
+                match route.as_str() {
+                    "/api/providers/preset" => {
+                        let pid = v["preset_id"].as_str().unwrap_or("");
+                        let key = v["api_key"].as_str();
+                        let enabled = v.get("enabled").and_then(Value::as_bool);
+                        manage::upsert_preset(&data, &home, gateway_port, pid, key, enabled)
+                    }
+                    "/api/providers/custom" => {
+                        manage::upsert_custom(&data, &home, gateway_port, &v)
+                    }
+                    "/api/providers/update" => {
+                        manage::update_provider(&data, &home, gateway_port, &v)
+                    }
+                    "/api/providers/delete" => {
+                        let pid = v["provider_id"].as_str().unwrap_or("");
+                        manage::delete_provider(&data, &home, gateway_port, pid)
+                    }
+                    "/api/proxy" => {
+                        let url = v["url"].as_str().unwrap_or("");
+                        let configured = network::set_proxy(&data, url).map_err(|_| {
+                            "代理地址须为 HTTP/HTTPS URL，不含用户名、密码、查询参数或自定义路径。"
+                        })?;
+                        Ok(json!({"ok": true, "configured": configured}))
+                    }
+                    "/api/sync" => {
+                        let reg = config::read(&data.join("providers.json"))?;
+                        if config::catalog(&reg)?.is_empty() {
+                            return Err("请先添加并启用至少一个模型厂商，再同步客户端。".into());
+                        }
+                        config::sync_for_port(&data, &home, gateway_port)?;
+                        Ok(json!({
+                            "ok": true,
+                            "clients": manage::inspect_clients(&home, gateway_port)
+                        }))
+                    }
+                    _ => Err("NOT_FOUND".into()),
+                }
+            })
+            .await;
+            match op {
+                Ok(Ok(res)) => Json(res).into_response(),
+                Ok(Err(e)) => error_msg(400, "ACTION_FAILED", &safe_message(&*e)),
+                Err(_) => error_msg(500, "TASK_FAILED", "后台处理异常，请重试。"),
+            }
         } else {
             let route = path.clone();
             let operation = method.clone();
@@ -212,7 +350,7 @@ async fn handle(State(app): State<App>, req: Request) -> Response {
                     ("GET","/api/requests")=>store.requests(&f),
                     ("GET","/api/sessions")=>store.sessions(get("harness"),get("q"),f.offset),
                     ("GET","/api/settings")=>Ok(json!({"capture_bodies":store.setting("capture_bodies",json!(true)),"retention_days":store.setting("retention_days",json!(30)),"import_sessions":store.setting("import_sessions",json!(true)),"last_import":store.setting("last_import",Value::Null),"version":env!("CARGO_PKG_VERSION"),"database_bytes":std::fs::metadata(store.dir.join("traces.sqlite3")).map(|m|m.len()).unwrap_or(0)})),
-                    ("POST","/api/import")=>harness::import(&store,&config::home(),&data),
+                    ("POST","/api/import")=>harness::import(&store,&home,&data),
                     ("POST","/api/prune")=>Ok(json!({"removed_requests":store.retention()?})),
                     _ if operation=="GET"&&route.starts_with("/api/requests/")=>store.request(route.trim_start_matches("/api/requests/")),
                     _ if operation=="GET"&&route.starts_with("/api/sessions/")=>store.session(route.trim_start_matches("/api/sessions/"),f.offset),
@@ -244,10 +382,27 @@ async fn handle(State(app): State<App>, req: Request) -> Response {
     }
     result
 }
-pub async fn open_console(data: &std::path::Path, port: u16, host: &str) -> Result<()> {
+pub async fn open_console(
+    data: &std::path::Path,
+    port: u16,
+    host: &str,
+    page: Option<&str>,
+) -> Result<()> {
     if !["loom.localhost", "localhost", "127.0.0.1"].contains(&host) {
         return Err("管控台仅支持本机域名".into());
     }
+    let valid_page = page.filter(|p| {
+        [
+            "onboarding",
+            "providers",
+            "integrations",
+            "overview",
+            "requests",
+            "sessions",
+            "settings",
+        ]
+        .contains(p)
+    });
     let key = std::fs::read_to_string(data.join("hub.key"))?;
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -262,7 +417,10 @@ pub async fn open_console(data: &std::path::Path, port: u16, host: &str) -> Resu
         .json()
         .await?;
     let ticket = v["ticket"].as_str().ok_or("ticket missing")?;
-    let url = format!("http://{host}:{port}/#ticket={ticket}");
+    let url = match valid_page {
+        Some(p) => format!("http://{host}:{port}/#ticket={ticket}&page={p}"),
+        None => format!("http://{host}:{port}/#ticket={ticket}"),
+    };
     let command = if cfg!(target_os = "macos") {
         "/usr/bin/open"
     } else {
@@ -307,11 +465,13 @@ mod tests {
     }
     #[tokio::test]
     async fn console_requires_one_time_login_same_origin_and_never_exposes_hub_key() {
-        let d = tempfile::tempdir().unwrap();
-        config::init(d.path()).unwrap();
-        let key = std::fs::read_to_string(d.path().join("hub.key")).unwrap();
-        let store = Store::open(d.path()).unwrap();
-        let app = router(App::new(d.path().into(), store, 4320));
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("data");
+        let h = t.path().join("home");
+        config::init(&d).unwrap();
+        let key = std::fs::read_to_string(d.join("hub.key")).unwrap();
+        let store = Store::open(&d).unwrap();
+        let app = router(App::new_with_home(d, h, store, 4320, 4319));
         assert_eq!(
             app.clone()
                 .oneshot(request("GET", "/api/overview", None, None, Value::Null))
@@ -398,11 +558,13 @@ mod tests {
 
     #[tokio::test]
     async fn local_domain_login_works_and_rejects_other_local_origins() {
-        let d = tempfile::tempdir().unwrap();
-        config::init(d.path()).unwrap();
-        let key = std::fs::read_to_string(d.path().join("hub.key")).unwrap();
-        let store = Store::open(d.path()).unwrap();
-        let app = router(App::new(d.path().into(), store, 4320));
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("data");
+        let h = t.path().join("home");
+        config::init(&d).unwrap();
+        let key = std::fs::read_to_string(d.join("hub.key")).unwrap();
+        let store = Store::open(&d).unwrap();
+        let app = router(App::new_with_home(d, h, store, 4320, 4319));
         let authorization = format!("Bearer {}", key.trim());
         let response = app
             .clone()
@@ -469,5 +631,184 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[tokio::test]
+    async fn console_management_apis_validate_auth_and_preserve_credentials() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("data");
+        let h = t.path().join("home");
+        config::init(&d).unwrap();
+        let key = std::fs::read_to_string(d.join("hub.key")).unwrap();
+        let store = Store::open(&d).unwrap();
+        let app = router(App::new_with_home(d.clone(), h.clone(), store, 4320, 14319));
+
+        // Unauthenticated setup read & mutations must fail with 401.
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", "/api/setup", None, None, Value::Null))
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    "/api/providers/preset",
+                    Some("http://127.0.0.1:4320"),
+                    None,
+                    json!({"preset_id": "deepseek", "api_key": "SECRET"})
+                ))
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+
+        let authorization = format!("Bearer {}", key.trim());
+        let launch = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/launch",
+                None,
+                Some(&authorization),
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        let v: Value =
+            serde_json::from_slice(&to_bytes(launch.into_body(), 65536).await.unwrap()).unwrap();
+        let login = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/login",
+                Some("http://127.0.0.1:4320"),
+                None,
+                json!({"ticket": v["ticket"]}),
+            ))
+            .await
+            .unwrap();
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let authed = |method: &str, path: &str, origin: Option<&str>, body: Value| {
+            let mut r = request(method, path, origin, None, body);
+            r.headers_mut().insert("cookie", cookie.parse().unwrap());
+            r
+        };
+
+        // Cross-origin or missing Origin on POST must be rejected (403).
+        assert_eq!(
+            app.clone()
+                .oneshot(authed(
+                    "POST",
+                    "/api/providers/preset",
+                    None,
+                    json!({"preset_id": "deepseek", "api_key": "SECRET"})
+                ))
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(authed(
+                    "POST",
+                    "/api/providers/preset",
+                    Some("http://evil.invalid"),
+                    json!({"preset_id": "deepseek", "api_key": "SECRET"})
+                ))
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+
+        // Save preset, update proxy, verify setup never leaks secrets.
+        let save_res = app
+            .clone()
+            .oneshot(authed(
+                "POST",
+                "/api/providers/preset",
+                Some("http://127.0.0.1:4320"),
+                json!({"preset_id": "deepseek", "api_key": "UPSTREAM_ADMIN_FIXTURE"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(save_res.status(), 200);
+        assert_eq!(
+            std::fs::read_to_string(d.join("keys/local-deepseek.key")).unwrap(),
+            "UPSTREAM_ADMIN_FIXTURE"
+        );
+        assert!(h.join(".pi/agent/models.json").is_file());
+
+        let proxy_res = app
+            .clone()
+            .oneshot(authed(
+                "POST",
+                "/api/proxy",
+                Some("http://127.0.0.1:4320"),
+                json!({"url": "http://127.0.0.1:17890"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(proxy_res.status(), 200);
+
+        let setup_res = app
+            .clone()
+            .oneshot(authed("GET", "/api/setup", None, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(setup_res.status(), 200);
+        let setup_bytes = to_bytes(setup_res.into_body(), 256 * 1024).await.unwrap();
+        let setup_text = String::from_utf8_lossy(&setup_bytes);
+        assert!(!setup_text.contains("UPSTREAM_ADMIN_FIXTURE"));
+        assert!(!setup_text.contains(key.trim()));
+        assert!(!setup_text.contains("17890"));
+        let setup_json: Value = serde_json::from_slice(&setup_bytes).unwrap();
+        assert_eq!(setup_json["needs_setup"], false);
+        assert_eq!(setup_json["proxy"]["configured"], true);
+
+        // Sync, add custom provider, delete custom provider.
+        let custom_res = app
+            .clone()
+            .oneshot(authed(
+                "POST",
+                "/api/providers/custom",
+                Some("http://127.0.0.1:4320"),
+                json!({
+                    "prefix": "custom-test",
+                    "name": "Custom Test",
+                    "base_url": "https://custom.invalid/v1",
+                    "models_text": "test-m1",
+                    "api_key": "CUSTOM_KEY_FIXTURE"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(custom_res.status(), 200);
+
+        let del_res = app
+            .clone()
+            .oneshot(authed(
+                "POST",
+                "/api/providers/delete",
+                Some("http://127.0.0.1:4320"),
+                json!({"provider_id": "local-custom-test"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(del_res.status(), 200);
+        assert!(!d.join("keys/local-custom-test.key").exists());
     }
 }

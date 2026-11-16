@@ -1,1 +1,192 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Loom · 管控台</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body><aside><a class="brand" href="#overview"><span>⌘</span> Loom</a><small>LOCAL CONTROL</small><nav><button data-page="overview" class="active">概览</button><button data-page="requests">请求</button><button data-page="sessions">会话轨迹</button><button data-page="settings">采集设置</button></nav><footer><span class="dot"></span> 仅在本机保存<br><small id="version">Rust gateway</small></footer></aside><main><header><div><p class="eyebrow">OBSERVABILITY</p><h1 id="title">调用概览</h1></div><div class="actions"><span id="updated"></span><button id="refresh">刷新</button></div></header><section id="login" hidden><h2>连接本机 Loom</h2><p>在终端运行以下命令，浏览器会自动安全登录。</p><pre>loom console</pre><p class="muted">不需要在网页粘贴 API Key。</p></section><div id="error" role="alert" hidden></div><section id="filters"><label>时间<select id="range" aria-label="时间"><option value="24">最近 24 小时</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option></select></label><label>供应商<select id="provider" aria-label="供应商"><option value="">全部供应商</option></select></label><label>模型<select id="model" aria-label="模型"><option value="">全部模型</option></select></label><label>Harness<select id="harness" aria-label="Harness"><option value="">全部 harness</option><option value="pi">pi</option><option value="opencode2">opencode2</option><option value="claude-code">Claude Code</option><option value="unknown">未识别</option></select></label></section><div id="content" aria-live="polite"></div><dialog id="detail"><div class="detail-head"><h2 id="detail-title">详情</h2><button id="close-detail" aria-label="关闭详情">关闭 ✕</button></div><div id="detail-content"></div></dialog><noscript>请启用 JavaScript，以查看本机请求和会话。</noscript></main></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Loom · 本机模型工作台</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-layout" id="app-layout">
+    <aside class="rail" aria-label="主导航">
+      <a class="brand" href="#onboarding" title="Loom 本机工作台">
+        <span class="brand-glyph" aria-hidden="true">⌘</span>
+      </a>
+      <nav class="rail-nav" aria-label="功能分区">
+        <button type="button" class="rail-btn" data-page="onboarding" title="新手引导向导">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.6 5.8L21 9.6l-4.6 4.4 1.1 6.4L12 17.3l-5.5 3.1 1.1-6.4L3 9.6l6.4-.8z"/></svg>
+          <span>向导</span>
+        </button>
+        <button type="button" class="rail-btn" data-page="providers" title="模型厂商与 API Key 管理">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+          <span>厂商</span>
+        </button>
+        <button type="button" class="rail-btn" data-page="integrations" title="客户端同步与代理网络">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <span>接入</span>
+        </button>
+        <button type="button" class="rail-btn" data-page="overview" title="本机调用概览">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16"/><path d="M6 15l4-5 4 3 4-6"/></svg>
+          <span>概览</span>
+        </button>
+        <button type="button" class="rail-btn" data-page="requests" title="请求追踪记录">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
+          <span>请求</span>
+        </button>
+        <button type="button" class="rail-btn" data-page="sessions" title="原生会话轨迹回放">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>会话</span>
+        </button>
+      </nav>
+      <div class="rail-bottom">
+        <button type="button" class="rail-btn" data-page="settings" title="采集与保留设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.78 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>设置</span>
+        </button>
+        <div class="rail-version" id="version" title="Loom 仅在本机回环运行">本机</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="crumb">Loom</span>
+          <span class="crumb-sep">/</span>
+          <h1 id="title">新手向导</h1>
+          <span class="health-pill" id="gateway-pill">
+            <span class="dot"></span>
+            <span id="gateway-pill-text">检测网关状态…</span>
+          </span>
+        </div>
+        <div class="topbar-actions">
+          <span class="updated-at" id="updated"></span>
+          <button type="button" class="btn btn-subtle" id="quick-sync" hidden>同步客户端</button>
+          <button type="button" class="btn btn-subtle" id="refresh">刷新</button>
+        </div>
+      </header>
+
+      <div id="error" class="alert-error" role="alert" hidden></div>
+
+      <section id="login" class="login-stage" hidden>
+        <div class="login-card">
+          <div class="login-badge">LOCAL LOOPBACK SECURITY</div>
+          <h2>安全连接本机 Loom 工作台</h2>
+          <p class="muted">为保护你本机的模型 API Key 不被任意网页读取，Loom 仅接受本机桌面端或一次性终端票据登录。</p>
+          <div class="login-options">
+            <div class="login-option">
+              <h3>方式一：通过桌面端一键打开（推荐）</h3>
+              <p class="muted">macOS 用户直接打开 <code>~/Applications/Loom.app</code> 或点击顶部菜单栏 <strong>⌘</strong> →「打开 Loom 工作台」，免命令自动安全登录。</p>
+            </div>
+            <div class="login-option">
+              <h3>方式二：在终端运行命令自动跳转</h3>
+              <p class="muted">复制并在终端运行以下命令，浏览器会自动携带一次性票据进入工作台：</p>
+              <div class="cmd-row">
+                <pre id="console-cmd">loom console</pre>
+                <button type="button" class="btn btn-primary" id="copy-console-cmd">复制命令</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="filters" class="filters-bar" hidden>
+        <label class="field-inline">
+          <span>时间窗口</span>
+          <select id="range" aria-label="时间窗口">
+            <option value="24">最近 24 小时</option>
+            <option value="168">最近 7 天</option>
+            <option value="720">最近 30 天</option>
+          </select>
+        </label>
+        <label class="field-inline">
+          <span>供应商</span>
+          <select id="provider" aria-label="供应商">
+            <option value="">全部供应商</option>
+          </select>
+        </label>
+        <label class="field-inline">
+          <span>模型</span>
+          <select id="model" aria-label="模型">
+            <option value="">全部模型</option>
+          </select>
+        </label>
+        <label class="field-inline">
+          <span>Harness</span>
+          <select id="harness" aria-label="Harness">
+            <option value="">全部 Harness</option>
+            <option value="pi">pi</option>
+            <option value="opencode2">opencode2</option>
+            <option value="claude-code">Claude Code</option>
+            <option value="unknown">未识别</option>
+          </select>
+        </label>
+      </section>
+
+      <main class="stage-content" id="content" aria-live="polite"></main>
+    </div>
+  </div>
+
+  <dialog id="detail" aria-labelledby="detail-title">
+    <div class="dialog-head">
+      <h2 id="detail-title">详情</h2>
+      <button type="button" class="btn btn-subtle" id="close-detail" aria-label="关闭弹窗">关闭 ✕</button>
+    </div>
+    <div id="detail-content"></div>
+  </dialog>
+
+  <dialog id="provider-dialog" aria-labelledby="provider-dialog-title">
+    <div class="dialog-head">
+      <h2 id="provider-dialog-title">添加自定义 HTTPS 模型厂商</h2>
+      <button type="button" class="btn btn-subtle" id="close-provider-dialog" aria-label="关闭弹窗">关闭 ✕</button>
+    </div>
+    <form id="custom-provider-form" class="modal-form">
+      <input type="hidden" id="cf-provider-id" value="">
+      <div class="form-grid">
+        <label class="form-field">
+          <span>厂商标识（prefix，小写字母/数字/短横线）</span>
+          <input id="cf-prefix" required placeholder="例如：openrouter 或 siliconflow" autocomplete="off">
+        </label>
+        <label class="form-field">
+          <span>显示名称</span>
+          <input id="cf-name" placeholder="例如：OpenRouter（可留空默认同 prefix）" autocomplete="off">
+        </label>
+      </div>
+      <label class="form-field">
+        <span>OpenAI 兼容 Base URL（须为 https://，无用户名/密码/查询参数）</span>
+        <input id="cf-base-url" type="url" required placeholder="https://api.example.com/v1" autocomplete="off">
+      </label>
+      <label class="form-field">
+        <span>Anthropic 原生 Base URL（可选，留空则仅走 OpenAI 兼容协议）</span>
+        <input id="cf-anthropic-url" type="url" placeholder="https://api.example.com/anthropic" autocomplete="off">
+      </label>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>计费来源说明</span>
+          <input id="cf-billing" value="独立 API 钱包" placeholder="独立 API 钱包 / 套餐订阅">
+        </label>
+        <label class="form-field checkbox-field">
+          <input id="cf-reasoning" type="checkbox">
+          <span>默认开启思考模型能力标记（reasoning）</span>
+        </label>
+      </div>
+      <label class="form-field">
+        <span>模型 ID 列表（逗号或换行分隔，支持同时填写多个）</span>
+        <textarea id="cf-models" rows="3" required placeholder="例如：deepseek-chat, qwen3-coder-plus"></textarea>
+      </label>
+      <label class="form-field">
+        <span id="cf-key-label">API Key（仅保存在本机 0600 文件中）</span>
+        <input id="cf-key" type="password" placeholder="粘贴 API Key" autocomplete="off">
+      </label>
+      <div id="cf-error" class="inline-feedback bad" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-subtle" id="cancel-provider-dialog">取消</button>
+        <button type="submit" class="btn btn-primary" id="cf-submit">保存并同步客户端</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <noscript>请启用 JavaScript，以使用 Loom 本机模型工作台。</noscript>
+</body>
+</html>
